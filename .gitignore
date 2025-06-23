@@ -47,3 +47,10 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# directories
+data/
+plots/
+
+# custom linting files
+.lintr
