@@ -31,82 +31,19 @@ fname <- "modelData.rds"
 model_data <- read_rds(file.path(posterior_path_dir, fname))
 data <- fix_method_names(model_data)
 
+# summarize by primary period, method used, and property
+methods_used <- make_methods_used(data)
+
 fname <- "densitySummaries.rds"
 density <- read_rds(file.path(posterior_path_dir, fname))
 
-# will need to summarize by primary period, method used, and property
-make_methods_used <- function(df) {
-	df |>
-		select(propertyID, primary_period, method) |>
-		distinct() |>
-		pivot_wider(names_from = method, values_from = method) |>
-		unite(method, -c(propertyID, primary_period), sep = ", ", na.rm = TRUE) |>
-		rename(methods_used = method)
-}
-
-methods_used <- make_methods_used(data)
 
 # for analysis by primary period, we need to calculate totals
 # by property, primary period, and method for take and effort
 # then join to density summaries and methods_used
-make_model_data <- function(df) {
-	df |>
-		group_by(
-			propertyID,
-			agrp_prp_id,
-			start_dates,
-			end_dates,
-			st_name,
-			cnty_name,
-			farm_bill,
-			alws_agrprop_id,
-			property,
-			primary_period,
-			property_area_km2,
-			county_code
-		) |>
-		summarise(
-			total_take = sum(take),
-			total_effort_per = sum(effort_per),
-			n_events = n()
-		) |>
-		ungroup() |>
-		mutate(take_density = total_take / property_area_km2) |>
-		mutate(farm_bill = if_else(is.na(farm_bill), 0, farm_bill))
-}
-
 model_data <- make_model_data(data)
 
 # last bit of data prep
-data_prep <- function(df, df_density, df_methods, cutoff_date) {
-	df |>
-		left_join(df_density) |>
-		left_join(df_methods) |>
-		mutate(year = year(end_dates)) |>
-		filter(end_dates <= cutoff_date) |>
-		mutate(abundance_estimate = round(`0.5` * property_area_km2)) |>
-		rename(
-			density_estimate = `0.5`,
-			density_quantile_0.05 = `0.05`,
-			density_quantile_0.95 = `0.95`
-		) |>
-		select(
-			propertyID,
-			end_dates,
-			year,
-			st_name,
-			cnty_name,
-			county_code,
-			property_area_km2,
-			total_take,
-			take_density,
-			density_estimate,
-			abundance_estimate,
-			n_events,
-			methods_used
-		)
-}
-
 data_mis <- data_prep(model_data, density, methods_used, cutoff_date)
 
 # need to create a data frame with all primary periods for each property
@@ -209,7 +146,7 @@ mean_growth <- function(df) {
 mu_lambda <- mean_growth(realized_growth)
 
 plot_mean_lambdas <- function(df) {
-	y_order <- mu_lambda |>
+	y_order <- df |>
 		group_by(st_name) |>
 		summarise(y = median(mu), n = n()) |>
 		arrange(y) |>
@@ -218,7 +155,7 @@ plot_mean_lambdas <- function(df) {
 
 	y_fac <- y_order$st_name2
 
-	mu_lambda |>
+	df |>
 		left_join(y_order) |>
 		mutate(st_name2 = factor(st_name2, levels = y_fac)) |>
 		ggplot() +
@@ -241,8 +178,8 @@ plot_mean_lambdas <- function(df) {
 		theme_bw()
 }
 
-
-gname <- rateOfChange.jpeg
+gname <- "rateOfChange.jpeg"
+plot_mean_lambdas(mu_lambda)
 ggsave(
 	gname,
 	path = plot_dir,
@@ -251,26 +188,6 @@ ggsave(
 	height = 12
 )
 
-
-realized_growth |>
-	filter(delta_pp == 13) |>
-	mutate(x = "x") |>
-	ggplot(aes(x = x, y = lambda_star)) +
-	geom_jitter(size = 1, color = "grey", fill = "grey") +
-	geom_boxplot(outliers = FALSE, alpha = 0) +
-	labs(
-		x = "Annual population growth rate",
-		y = ""
-	) +
-	theme_bw() +
-	theme(axis.text.x = element_blank())
-
-ggsave(
-	"plots/effectOfMgmt/rateOfChangeAnnual.jpeg",
-	units = "cm",
-	width = 6,
-	height = 12
-)
 
 realized_growth |>
 	filter(lambda >= 1) |>
@@ -301,12 +218,12 @@ realized_growth |>
 	# coord_cartesian(ylim = c(0, 1)) +
 	theme_bw()
 
-ggsave(
-	"plots/effectOfMgmt/mgmtObjectiveTheory.jpeg",
-	units = "cm",
-	width = 12,
-	height = 12
-)
+# ggsave(
+# 	"plots/effectOfMgmt/mgmtObjectiveTheory.jpeg",
+# 	units = "cm",
+# 	width = 12,
+# 	height = 12
+# )
 
 # population growth
 # need to get Z for each primary period
@@ -316,14 +233,8 @@ ggsave(
 lambda <- realized_growth$lambda
 round(quantile(lambda, c(0.05, 0.5, 0.95)), 3)
 
-lambda_year <- lambda^13
-round(quantile(lambda_year, c(0.05, 0.5, 0.95)), 3)
-
-xpop <- (1 - (1 / lambda[lambda >= 1])) * 100
+xpop <- (1 - (1 / lambda[lambda >= 1]))
 round(quantile(xpop, c(0.05, 0.5, 0.95)), 3)
-
-xpop_year <- (1 - (1 / lambda_year[lambda_year >= 1])) * 100
-round(quantile(xpop_year, c(0.05, 0.5, 0.95)), 3)
 
 
 realized_growth |>
