@@ -54,3 +54,6 @@ plots/
 
 # custom linting files
 .lintr
+
+# scratch files
+scratch.R
