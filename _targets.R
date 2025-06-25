@@ -51,6 +51,17 @@ list(
   ),
 
   tar_target(
+    name = parameter_last_file,
+    command = file.path(data_dir, last_iter, "posteriorSamples.rds"),
+    format = "file"
+  ),
+
+  tar_target(
+    name = parameter_last,
+    command = get_rds(parameter_last_file)
+  ),
+
+  tar_target(
     name = data_mis,
     command = data_prep(model_data_last, density_last, cutoff_date)
   ),
