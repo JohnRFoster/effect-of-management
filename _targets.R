@@ -83,16 +83,26 @@ list(
 
   tar_target(
     name = actual_percent_take,
-    command = prop_take_by_method(model_data_last, mu_lambda, density_last)
+    command = prop_take_by_method(model_data_last, density_last)
   ),
 
   tar_target(
     name = theoretical_percent_take,
-    command = prop_to_remove(realized_growth)
+    command = prop_to_remove(mu_lambda)
   ),
 
   tar_target(
     name = plot_prop_take,
     command = plot_percent_take(actual_percent_take, theoretical_percent_take)
+  ),
+
+  tar_target(
+    name = bootstrap_mgmt,
+    command = run_bootstrap(parameter_last, data_mis, n_ens)
+  ),
+
+  tar_target(
+    name = plot_managment,
+    command = plot_bootstrap(bootstrap_mgmt)
   )
 )
