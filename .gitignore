@@ -51,9 +51,13 @@ rsconnect/
 # directories
 data/
 plots/
+analysis_files/
+.vscode/
+_targets/
 
 # custom linting files
 .lintr
 
-# scratch files
+# files
 scratch.R
+analysis.html
