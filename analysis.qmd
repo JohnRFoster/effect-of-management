@@ -1,0 +1,206 @@
+---
+title: "Effect of management analysis"
+author: "John R. Foster"
+format: html
+execute: 
+  warning: false
+  error: false
+  echo: false
+---
+
+```{r}
+#| label: setup
+library(targets)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggpubr)
+```
+
+This document will run the analysis for the manuscript
+
+First, make sure everything is up to date:
+
+```{r}
+#| label: run targets pipeline
+#| echo: true
+tar_make()
+```
+
+### Population trajectory without management
+
+```{r}
+#| label: fig-trajectory
+#| fig-cap: "Figure shows the change in median wild pig density relative to the initial median density at week 0 over a one-year period. The boxplots represent the median and interquartile range (IQR) of these changes, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed. The Without management scenario (orange) is the result of the boostrapping procedure (see methods section ##), and the With managment scenario (purple) compares median posterior density estimates. The rows represent the density category at week 0, where Low is less than 2 pigs/km2, Medium is between 2-6 pigs/km2, and High is greater than 6 pigs/km2. Note the different y-axis scale for each initial density category."
+
+tar_read("plot_managment")
+
+```
+
+```{r}
+#| label: bootstap analysis
+df <- tar_read("bootstrap_mgmt")
+
+md <- max(df$delta_time)
+
+cat_medians <- df |>
+  filter(
+    delta_time == md
+  ) |>
+  group_by(st_name, density_cat, mgmt) |>
+  summarise(med = median(delta_density), 2) |>
+  ungroup()
+
+get_median_changes <- function(df, dc, mc) {
+  df |>
+    filter(
+      density_cat == dc,
+      mgmt == mc
+    ) |>
+    filter(med == min(med) | med == max(med)) |>
+    arrange(med) |>
+    mutate(med = round(med, 2))
+}
+
+tmp <- cat_medians |> get_median_changes("High", "Without")
+high_wo_states <- tmp$st_name
+high_wo_meds <- tmp$med
+
+tmp <- cat_medians |> get_median_changes("High", "With")
+high_with_states <- tmp$st_name
+high_with_meds <- tmp$med
+
+tmp <- cat_medians |> get_median_changes("Low", "Without")
+low_wo_states <- tmp$st_name
+low_wo_meds <- tmp$med
+
+tmp <- cat_medians |> get_median_changes("Low", "With")
+low_with_states <- tmp$st_name
+low_with_meds <- tmp$med
+
+```
+
+The effect of pig removals was more evident when the initial density was high (@fig-trajectory, bottom row). For example, when initial density was high (i.e. \> 6 pigs/km2) and management did not occur, the range in the change in density over one year was predicted to have a median increase between `r high_wo_meds[1]` and `r high_wo_meds[2]` pigs/km2 for `r high_wo_states[1]` and `r high_wo_states[2]`, respectively. By contrast, when management took place in high density areas, the range in the change in density over one year was observed with a median decrease between `r high_with_meds[1]` and `r high_with_meds[2]` pigs/km2 for `r high_with_states[1]` and `r high_with_states[2]`, respectively.
+
+When the initial density was low (i.e. \< 2 pigs/km2), the effect of management over a one year period was mixed (@fig-trajectory, top row). For example, when management did not occur, the range in the change in density over one year was predicted to have a median change between `r low_wo_meds[1]` and `r low_wo_meds[2]` pigs/km2 for `r low_wo_states[1]` and `r low_wo_states[2]`, respectively. By contrast, when management took place in low density areas, the range in the change in density over one year was observed with a median between `r low_with_meds[1]` and `r low_with_meds[2]` pigs/km2 for `r low_with_states[1]` and `r low_with_states[2]`, respectively.
+
+### Population growth rate
+
+```{r}
+#| label: fig-lambda
+#| fig-cap: "Figure shows the average population growth rate at each property within each state. The number of properties (n) within each state are on the y-axis. A growth rate greater than 1 indicates that a property's population is growing. Values of zero represent properties that went extinct between the first and second observed primary periods."
+
+tar_read("plot_lambda_hat_by_state")
+
+```
+
+```{r}
+#| label: lambda analysis
+
+df <- tar_read("mu_lambda")
+
+all_prop_med <- round(median(df$mu), 2)
+all_prop_low <- round(quantile(df$mu, 0.05), 2)
+all_prop_high <- round(quantile(df$mu, 0.95), 2)
+
+n_props <- nrow(df)
+n_declining <- df |>
+  filter(mu < 1) |>
+  nrow()
+percent_declining <- round(n_declining / n_props * 100)
+
+lambda_summary <- df |>
+  group_by(st_name) |>
+  summarise(
+    n = n(),
+    med = median(mu),
+    sd = sd(mu)
+  ) |>
+  arrange(med)
+
+low <- lambda_summary |>
+  filter(med == min(med))
+state_low <- low$st_name
+low_lambda <- round(low$med, 2)
+
+high <- lambda_summary |>
+  filter(med == max(med))
+state_high <- high$st_name
+high_lambda <- round(high$med, 2)
+
+
+low_sd <- lambda_summary |>
+  filter(sd == min(sd, na.rm = TRUE))
+state_low_sd <- low_sd$st_name
+low_lambda_sd <- round(low_sd$sd, 2)
+
+high_sd <- lambda_summary |>
+  filter(sd == max(sd, na.rm = TRUE))
+state_high_sd <- high_sd$st_name
+high_lambda_sd <- round(high_sd$sd, 2)
+
+n_under_1 <- lambda_summary |>
+  filter(med < 1) |>
+  nrow()
+
+```
+
+Individual properties exhibited a range of average population growth rates. Across all properties the median population growth rate per 28-day period was `r all_prop_med` (90% CI: `r all_prop_low` - `r all_prop_high`). There was also variation within and across states (@fig-lambda). For example, the median growth rate per 28-day period ranged from `r low_lambda` to `r high_lambda` for `r state_low` and `r state_high`, respectively. The standard deviation of growth rates within each state ranged from `r low_lambda_sd` to `r high_lambda_sd` for `r state_low_sd` and `r state_high_sd`, respectively. There were `r n_under_1` states where at least half of their properties had a declining population (growth rate under one), and `r percent_declining`% of all properties (n=`r n_declining`) had a declining population.
+
+
+### Proportion removed
+
+```{r}
+#| label: fig-removals
+#| fig-cap: "The rows with Method on the y-axis show the proportion of the population removed by method across properties with growing populations (growth rate >=1). The boxplots are drawn around the distribution of the average proportion of the population removed for each method in each property. The rows with Goal on the y-axis correspond to the theoretical proportion of the population that needs to be removed to achieve the desired outcome, where Maintenance would be to keep the population at it's current abundance, and 50% reduction would be to reduce the population by 50%. These boxplots where calculated based on the average growth rate for each property using equations ###. All boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR with outliers shown."
+
+tar_read("plot_prop_take")
+
+```
+
+
+```{r}
+#| label: proportion take
+df_actual <- tar_read("actual_percent_take")
+df_theoretical <- tar_read("theoretical_percent_take")
+
+by_state <- function(df) {
+  df |>
+    group_by(method, st_name) |>
+    summarise(
+      med = median(mu),
+      low = quantile(mu, 0.05),
+      high = quantile(mu, 0.95)
+    ) |>
+    ungroup()
+}
+
+a_by_state <- by_state(df_actual)
+t_by_state <- by_state(df_theoretical)
+
+
+tx_heli <- a_by_state |>
+  filter(method == "Helicopter", st_name == "TEXAS")
+
+tx_heli_med <- round(tx_heli$med, 2)
+tx_heli_low <- round(tx_heli$low, 2)
+tx_heli_high <- round(tx_heli$high, 2)
+
+tx_theory_m <- t_by_state |>
+  filter(st_name == "TEXAS", method == "Maintenance")
+
+tx_th_med <- round(tx_theory_m$med, 2)
+tx_th_low <- round(tx_theory_m$low, 2)
+tx_th_high <- round(tx_theory_m$high, 2)
+
+
+a_by_state |> filter(method == "Trap")
+a_by_state |> filter(method == "Snare")
+
+```
+
+Here, we focus on the proportion of the population removed for properties that have growing populations because we are interested in how removals might be used to reach a management goal (i.e. a 50% reduction in abundance), and what amount of the population that needs to be removed to reach that goal. This only makes sense for growing populations 
+
+
+
+To interpret @fig-removals, we start with a specific example to explain how to interrpet the data, and then later we report the findings at large. For the specific example, let's look at Texas. The median proportion of the population removed in a single primary period, regardless of the population growth rate, by helicopters was `r tx_heli_med` (90% CI `r tx_heli_low` - `r tx_heli_high`). If the population was growing and the managment goal was population maintenance, then well more then half of the removals by helicopter are enough to accomplish this goal, as the median proportion of the population that needs to be removed to accomplish population maintenance is `r tx_th_med` (90% CI `r tx_th_low` - `r tx_th_high`). If the mangement goal was to reduce the population by 50%, then the median proportion of wild pigs removed by helicopters would only be
