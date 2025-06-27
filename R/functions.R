@@ -218,12 +218,9 @@ plot_mean_lambdas <- function(df) {
 		theme_bw()
 }
 
-prop_take_by_method <- function(df, df_mu_lambda, df_density) {
-	tmp <- df |>
-		fix_method_names()
-
-	left_join(tmp, df_mu_lambda) |>
-		filter(mu >= 1) |>
+prop_take_by_method <- function(df, df_density) {
+	df |>
+		fix_method_names() |>
 		group_by(
 			propertyID,
 			agrp_prp_id,
@@ -262,7 +259,6 @@ prop_take_by_method <- function(df, df_mu_lambda, df_density) {
 			abundance_estimate,
 			mu
 		) |>
-
 		group_by(method, propertyID, st_name) |>
 		summarise(
 			n = n(),
@@ -272,27 +268,26 @@ prop_take_by_method <- function(df, df_mu_lambda, df_density) {
 		mutate(group = "Actual")
 }
 
-prop_to_remove <- function(df_realized_growth) {
-	df_realized_growth |>
-		filter(lambda >= 1) |>
+prop_to_remove <- function(df_mu_lambda) {
+	threshold_filter <- function(df, prop, goal) {
+		df |>
+			mutate(threshold = prop + mu, goal = goal) |>
+			filter(threshold >= 1) |>
+			mutate(prop = -1 * (((1 - prop) - mu) / mu))
+	}
+
+	tmp_0 <- threshold_filter(df_mu_lambda, 0, "maintain")
+	tmp_50 <- threshold_filter(df_mu_lambda, 0.5, "half")
+
+	bind_rows(tmp_0, tmp_50) |>
 		mutate(
-			mu_maintain = -1 * ((1 - lambda) / lambda),
-			mu_reduction_50 = -1 * ((0.5 - lambda) / lambda)
+			group = "Theoretical",
+			method = if_else(grepl("maintain", goal), "Maintenance", "50% reduction")
 		) |>
-		group_by(propertyID, st_name) |>
-		summarise(
-			n = n(),
-			mu_maintain = mean(mu_maintain),
-			mu_reduction_50 = mean(mu_reduction_50),
-		) |>
-		ungroup() |>
-		select(mu_maintain, mu_reduction_50, propertyID, st_name) |>
-		pivot_longer(
-			cols = c(mu_maintain, mu_reduction_50),
-			names_to = "method",
-			values_to = "mu"
-		) |>
-		mutate(group = "Theoretical")
+		select(method, propertyID, st_name, n, prop, mu, group) |>
+		mutate(lambda = mu) |>
+		select(-mu) |>
+		rename(mu = "prop")
 }
 
 plot_percent_take <- function(df_actual, df_theoretical) {
@@ -342,20 +337,32 @@ plot_percent_take <- function(df_actual, df_theoretical) {
 				color = "Actual"
 			) +
 			scale_y_discrete(drop = FALSE) +
+			scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
 			theme_bw() +
 			theme(axis.title.x = element_blank(), axis.text.x = element_blank())
 
+		limits <- c(0.5, 2)
+		breaks <- seq(0.5, 2, length.out = 4)
+		colors <- c("#225ea8", "#41b6c4", "#a1dab4", "#ffffcc")
+
 		g2 <- th |>
 			ggplot() +
-			aes(x = mu, y = method) +
-			geom_boxplot() +
-			facet_wrap(~st_name) +
-			coord_cartesian(xlim = c(0, 1)) +
-			labs(
-				x = "Proportion of population removed in a 28-day period",
-				y = "Goal",
-				color = "Theoretical"
+			aes(y = mu, x = method, color = lambda) +
+			geom_jitter(
+				size = 1,
+				alpha = 1,
+				position = position_jitter(width = 0.25),
 			) +
+			scale_color_gradientn(colors = colors, limits = limits, breaks = breaks) +
+			geom_boxplot(outliers = FALSE, alpha = 0, color = "#3a3838") +
+			facet_wrap(~st_name) +
+			labs(
+				y = "Proportion of population removed in a 28-day period",
+				x = "Goal",
+				color = "Population growth rate"
+			) +
+			scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
+			coord_flip() +
 			theme_bw() +
 			theme(strip.text = element_blank())
 
@@ -365,7 +372,7 @@ plot_percent_take <- function(df_actual, df_theoretical) {
 			ncol = 1,
 			common.legend = TRUE,
 			legend = "right",
-			heights = c(5, 2)
+			heights = c(4, 2)
 		)
 	}
 
@@ -378,6 +385,185 @@ plot_percent_take <- function(df_actual, df_theoretical) {
 		g2,
 		g3,
 		ncol = 1,
-		common.legend = TRUE
+		common.legend = TRUE,
+		legend = "bottom"
 	)
+}
+
+run_bootstrap <- function(
+	df_params,
+	df_data,
+	n_ens,
+	sim_days = 365,
+	n_sim = 10000
+) {
+	# get random sample of parameters
+	set.seed(803)
+	dem <- df_params[sample.int(nrow(df_params), n_ens, replace = TRUE), ]
+	phi <- dem$phi_mu # survival
+	zeta <- 28 * exp(dem$log_nu) / 365 # per capita growth rate
+	r <- phi + zeta / 2 # finite rate of increase
+
+	all_out <- tibble()
+	counter <- 1
+	while (counter < n_sim) {
+		i <- sample.int(nrow(df_data), 1)
+
+		tmp_start <- df_data |>
+			slice(i) |>
+			select(
+				propertyID,
+				property_area_km2,
+				abundance_estimate,
+				end_dates,
+				year,
+				st_name,
+				property_area_km2
+			)
+
+		start_date <- tmp_start$end_dates
+		property <- tmp_start$propertyID
+		area <- tmp_start$property_area_km2
+
+		date_seq <- seq.Date(start_date, to = start_date + sim_days, by = "4 weeks")
+		n_1 <- tmp_start$abundance_estimate
+
+		k_dens <- 30 # carrying capacity as a density
+		K <- round(k_dens * area) # carrying capacity as abundance
+
+		if (n_1 == 0 || n_1 > K) {
+			next
+		}
+
+		tmp_compare <- df_data |>
+			filter(propertyID %in% property, end_dates %in% date_seq) |>
+			select(
+				propertyID,
+				property_area_km2,
+				abundance_estimate,
+				end_dates,
+				year,
+				st_name
+			)
+
+		timestep_df <- tibble(
+			start_date = start_date,
+			end_dates = date_seq
+		) |>
+			filter(end_dates <= max(tmp_compare$end_dates)) |>
+			mutate(
+				delta_time = as.numeric(end_dates - start_date),
+				year = year(end_dates)
+			)
+
+		n_time <- nrow(timestep_df)
+
+		if (n_time == 1) {
+			next
+		}
+
+		process_model <- function(n_init, r, K, n_time, n_ens) {
+			N <- matrix(NA, n_ens, n_time)
+			N[, 1] <- n_init
+
+			for (j in 2:n_time) {
+				nm1 <- N[, j - 1]
+
+				lambda <- nm1 + (r - 1) * nm1 * (1 - nm1 / K)
+				lambda <- pmax(0, lambda)
+
+				if (any(is.na(lambda))) {
+					print(i)
+					stop()
+				}
+
+				N[, j] <- rpois(n_ens, lambda)
+			}
+			apply(N, 2, median)
+		}
+
+		n_init <- pmin(K, rpois(n_ens, n_1))
+		N <- process_model(n_init, r, K, n_time, n_ens)
+
+		timestep_df$abundanceNoMgmt <- N
+
+		out <- left_join(tmp_compare, timestep_df, by = c("end_dates", "year")) |>
+			filter(delta_time > 0) |>
+			mutate(
+				density_estimate = abundance_estimate / area,
+				densityNoMgmt_estimate = abundanceNoMgmt / area,
+				area = area,
+				K = K,
+				D1 = n_1 / area,
+				density_cat = if_else(D1 < 2, "Low", "Medium"),
+				density_cat = if_else(D1 > 6, "High", density_cat),
+				density_cat = factor(density_cat, levels = c("Low", "Medium", "High"))
+			)
+		all_out <- bind_rows(all_out, out)
+
+		counter <- counter + 1
+
+		if (counter %% 1000 == 0) message(counter / n_sim * 100, "%")
+	}
+
+	with_mgmt <- all_out |>
+		select(delta_time, st_name, density_estimate, D1, density_cat) |>
+		mutate(
+			mgmt = "With",
+			delta_density = density_estimate - D1,
+			percent_change = delta_density / D1 * 100
+		)
+
+	without_mgmt <- all_out |>
+		select(delta_time, st_name, densityNoMgmt_estimate, D1, density_cat) |>
+		rename(density_estimate = densityNoMgmt_estimate) |>
+		mutate(
+			mgmt = "Without",
+			delta_density = density_estimate - D1,
+			percent_change = delta_density / D1 * 100
+		)
+
+	bind_rows(with_mgmt, without_mgmt)
+}
+
+plot_bootstrap <- function(df) {
+	keep <- seq(28, 28 * 30, by = 28 * 4)
+	weeks_f <- sort(keep / 7)
+
+	# good_enough <- df |>
+	# 	group_by(st_name, delta_time, density_cat) |>
+	# 	count() |>
+	# 	ungroup() |>
+	# 	filter(n >= 10) |>
+	# 	select(-n)
+
+	# all_3_cats <- good_enough |>
+	# 	select(st_name, density_cat) |>
+	# 	distinct() |>
+	# 	count(st_name) |>
+	# 	filter(n == 3) |>
+	# 	pull(st_name)
+
+	# df_plot <- left_join(good_enough, df) |>
+	# 	filter(st_name %in% all_3_cats)
+
+	df |>
+		filter(
+			delta_time %in% keep,
+			!st_name %in% c("NORTH CAROLINA", "VIRGINIA")
+		) |>
+		mutate(weeks = delta_time / 7, weeks = factor(weeks, levels = weeks_f)) |>
+		ggplot() +
+		aes(
+			x = weeks,
+			y = delta_density,
+			fill = mgmt
+		) +
+		geom_boxplot(outliers = FALSE) +
+		geom_hline(yintercept = 0, linetype = "dashed") +
+		facet_grid(density_cat ~ st_name, scales = "free_y") +
+		labs(x = "Weeks", y = "Change in density", fill = "Management") +
+		scale_fill_manual(values = c("With" = "#998ec3", "Without" = "#f1a340")) +
+		theme_bw() +
+		theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
 }
