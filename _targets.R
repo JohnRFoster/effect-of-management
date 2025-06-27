@@ -87,13 +87,8 @@ list(
   ),
 
   tar_target(
-    name = theoretical_percent_take,
-    command = prop_to_remove(mu_lambda)
-  ),
-
-  tar_target(
     name = plot_prop_take,
-    command = plot_percent_take(actual_percent_take, theoretical_percent_take)
+    command = plot_percent_take(actual_percent_take)
   ),
 
   tar_target(

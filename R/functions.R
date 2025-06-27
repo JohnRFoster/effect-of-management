@@ -268,36 +268,13 @@ prop_take_by_method <- function(df, df_density) {
 		mutate(group = "Actual")
 }
 
-prop_to_remove <- function(df_mu_lambda) {
-	threshold_filter <- function(df, prop, goal) {
-		df |>
-			mutate(threshold = prop + mu, goal = goal) |>
-			filter(threshold >= 1) |>
-			mutate(prop = -1 * (((1 - prop) - mu) / mu))
-	}
-
-	tmp_0 <- threshold_filter(df_mu_lambda, 0, "maintain")
-	tmp_50 <- threshold_filter(df_mu_lambda, 0.5, "half")
-
-	bind_rows(tmp_0, tmp_50) |>
-		mutate(
-			group = "Theoretical",
-			method = if_else(grepl("maintain", goal), "Maintenance", "50% reduction")
-		) |>
-		select(method, propertyID, st_name, n, prop, mu, group) |>
-		mutate(lambda = mu) |>
-		select(-mu) |>
-		rename(mu = "prop")
-}
-
-plot_percent_take <- function(df_actual, df_theoretical) {
-	tmp <- bind_rows(df_actual, df_theoretical) |>
+plot_percent_take <- function(df_actual) {
+	tmp <- bind_rows(df_actual) |>
 		# removing these states because their properties are all declining
 		filter(!st_name %in% c("NORTH CAROLINA", "VIRGINIA", "WEST VIRGINIA"))
 
-	plot_states <- function(df, states) {
+	plot_states <- function(df) {
 		ta <- df |>
-			filter(st_name %in% states, group == "Actual") |>
 			mutate(
 				method = factor(
 					method,
@@ -311,82 +288,57 @@ plot_percent_take <- function(df_actual, df_theoretical) {
 				)
 			)
 
-		th <- df |>
-			filter(st_name %in% states, group == "Theoretical") |>
-			mutate(
-				method = if_else(grepl("maintain", method), "Maintenance", method),
-				method = if_else(grepl("reduction", method), "50% reduction", method),
-				method = factor(
-					method,
-					levels = c(
-						"50% reduction",
-						"Maintenance"
-					)
-				)
-			)
-
-		g1 <- ta |>
+		ta |>
 			ggplot() +
 			aes(x = mu, y = method) +
 			geom_boxplot() +
 			facet_wrap(~st_name) +
 			coord_cartesian(xlim = c(0, 1)) +
 			labs(
-				x = "Proportion of population removed in a 28-day period",
+				x = "Mean proportion of individuals removed in a 28-day period",
 				y = "Method",
 				color = "Actual"
 			) +
 			scale_y_discrete(drop = FALSE) +
 			scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
-			theme_bw() +
-			theme(axis.title.x = element_blank(), axis.text.x = element_blank())
-
-		limits <- c(0.5, 2)
-		breaks <- seq(0.5, 2, length.out = 4)
-		colors <- c("#225ea8", "#41b6c4", "#a1dab4", "#ffffcc")
-
-		g2 <- th |>
-			ggplot() +
-			aes(y = mu, x = method, color = lambda) +
-			geom_jitter(
-				size = 1,
-				alpha = 1,
-				position = position_jitter(width = 0.25),
-			) +
-			scale_color_gradientn(colors = colors, limits = limits, breaks = breaks) +
-			geom_boxplot(outliers = FALSE, alpha = 0, color = "#3a3838") +
 			facet_wrap(~st_name) +
-			labs(
-				y = "Proportion of population removed in a 28-day period",
-				x = "Goal",
-				color = "Population growth rate"
-			) +
-			scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
-			coord_flip() +
-			theme_bw() +
-			theme(strip.text = element_blank())
-
-		ggarrange(
-			g1,
-			g2,
-			ncol = 1,
-			common.legend = TRUE,
-			legend = "right",
-			heights = c(4, 2)
-		)
+			theme_bw()
 	}
 
-	g1 <- plot_states(tmp, c("FLORIDA", "GEORGIA", "LOUISIANA"))
-	g2 <- plot_states(tmp, c("MISSISSIPPI", "MISSOURI", "NEW MEXICO"))
-	g3 <- plot_states(tmp, c("OKLAHOMA", "SOUTH CAROLINA", "TEXAS"))
+	g1 <- plot_states(tmp)
+
+	grid_search <- expand_grid(
+		lambda = seq(0.5, 1.5, by = 0.001),
+		goal = c(0, 0.5) # 0 is no change, 1 would be elimination
+	) |>
+		filter(goal + lambda >= 1) |>
+		mutate(needed = -1 * (((1 - goal) - lambda) / lambda))
+
+	g2 <- grid_search |>
+		mutate(goal = if_else(goal == 0, "Maintenance", "50% reduction")) |>
+		ggplot() +
+		aes(x = needed, y = goal, color = lambda) +
+		geom_line(linewidth = 10) +
+		scale_color_gradientn(
+			colours = c(
+				"#67a9cf",
+				"#f7f7f7",
+				"#ef8a62"
+			)
+		) +
+		labs(
+			x = "Proportion of population that needs to be removed\nto achieve managment goal",
+			y = "Goal",
+			color = "Growth rate"
+		) +
+		theme_bw()
 
 	ggarrange(
 		g1,
 		g2,
-		g3,
 		ncol = 1,
-		common.legend = TRUE,
-		legend = "bottom"
+		heights = c(2, 1),
+		labels = "AUTO"
 	)
 }
 
