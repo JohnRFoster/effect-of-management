@@ -97,7 +97,12 @@ list(
   ),
 
   tar_target(
-    name = plot_managment,
+    name = plot_management,
     command = plot_bootstrap(bootstrap_mgmt)
+  ),
+
+  tar_target(
+    name = plot_epr,
+    command = plot_effort(mu_lambda, actual_percent_take, model_data_last)
   )
 )
