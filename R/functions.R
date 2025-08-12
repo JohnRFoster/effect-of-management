@@ -190,16 +190,15 @@ plot_mean_lambdas <- function(df) {
 		group_by(st_name) |>
 		summarise(y = median(mu), n = n()) |>
 		arrange(y) |>
-		mutate(st_name2 = paste0(st_name, " (n=", n, ")")) |>
 		select(-n)
 
-	y_fac <- y_order$st_name2
+	y_fac <- y_order$st_name
 
 	df |>
 		left_join(y_order) |>
-		mutate(st_name2 = factor(st_name2, levels = y_fac)) |>
+		mutate(st_name = factor(st_name, levels = y_fac)) |>
 		ggplot() +
-		aes(y = mu, x = st_name2) +
+		aes(y = mu, x = st_name) +
 		geom_jitter(
 			size = 1,
 			# alpha = 0.2,
@@ -238,34 +237,35 @@ prop_take_by_method <- function(df, df_density) {
 		) |>
 		summarise(
 			total_take = sum(take),
+			total_effort = sum(effort),
+			total_log_effort = sum(log(effort)),
 			total_effort_per = sum(effort_per),
+			total_log_effort_per = sum(log(effort_per)),
 			total_trap_count = sum(trap_count),
-			n_events = n()
+			total_log_trap_count = sum(log(trap_count)),
+			total_events = n()
 		) |>
 		left_join(df_density) |>
 		ungroup() |>
 		mutate(abundance_estimate = round(`0.5` * property_area_km2)) |>
 		filter(abundance_estimate > 0) |>
 		mutate(
-			mu = total_take / abundance_estimate,
+			prop_take = total_take / abundance_estimate,
+			density = `0.5`,
 			method = stringr::str_replace(method, "Firearms", "Sharpshooting")
-		) |>
-		select(
-			method,
-			st_name,
-			propertyID,
-			end_dates,
-			total_take,
-			abundance_estimate,
-			mu
 		) |>
 		group_by(method, propertyID, st_name) |>
 		summarise(
-			n = n(),
-			mu = mean(mu)
+			mu_events = mean(total_events),
+			mu_prop_take = mean(prop_take),
+			mu_total_effort = mean(total_effort),
+			mu_total_log_effort = mean(total_log_effort),
+			mu_total_effort_per = mean(total_effort_per),
+			mu_total_log_effort_per = mean(total_log_effort_per),
+			mu_total_trap_count = mean(total_trap_count),
+			mu_total_log_trap_count = mean(total_log_trap_count)
 		) |>
-		ungroup() |>
-		mutate(group = "Actual")
+		ungroup()
 }
 
 plot_percent_take <- function(df_actual) {
@@ -290,7 +290,7 @@ plot_percent_take <- function(df_actual) {
 
 		ta |>
 			ggplot() +
-			aes(x = mu, y = method) +
+			aes(x = mu_prop_take, y = method) +
 			geom_boxplot() +
 			facet_wrap(~st_name) +
 			coord_cartesian(xlim = c(0, 1)) +
@@ -307,37 +307,35 @@ plot_percent_take <- function(df_actual) {
 
 	g1 <- plot_states(tmp)
 
-	grid_search <- expand_grid(
-		lambda = seq(0.5, 1.5, by = 0.001),
-		goal = c(0, 0.5) # 0 is no change, 1 would be elimination
-	) |>
-		filter(goal + lambda >= 1) |>
-		mutate(needed = -1 * (((1 - goal) - lambda) / lambda))
+	# grid_search <- expand_grid(
+	# 	lambda = seq(0.5, 2, by = 0.001),
+	# 	goal = c(0, 0.5, 1) # 0 is no change, 1 would be elimination
+	# ) |>
+	# 	filter(goal + lambda >= 1) |>
+	# 	mutate(needed = (lambda - (1 - goal)) / lambda)
 
-	g2 <- grid_search |>
-		mutate(goal = if_else(goal == 0, "Maintenance", "50% reduction")) |>
+	g2 <- expand_grid(
+		apr = seq(0, 1, by = 0.05),
+		lambda = seq(0, 2, by = 0.05)
+	) |>
+		mutate(epr = 1 + (lambda * (apr - 1))) |>
 		ggplot() +
-		aes(x = needed, y = goal, color = lambda) +
-		geom_line(linewidth = 10) +
-		scale_color_gradientn(
-			colours = c(
-				"#67a9cf",
-				"#f7f7f7",
-				"#ef8a62"
-			)
-		) +
+		aes(x = lambda, y = apr, fill = epr) +
+		geom_tile() +
+		scale_fill_gradientn(colors = c("#b2182b", "#f7f7f7", "#2166ac")) +
 		labs(
-			x = "Proportion of population that needs to be removed\nto achieve managment goal",
-			y = "Goal",
-			color = "Growth rate"
+			y = "Actual proportion of individuals removed",
+			x = "Populuation growth rate per 28-days",
+			fill = "Effective proportion\nof individuals removed"
 		) +
 		theme_bw()
 
 	ggarrange(
 		g1,
 		g2,
-		ncol = 1,
-		heights = c(2, 1),
+		ncol = 2,
+		widths = c(3, 2),
+		# align = "hv",
 		labels = "AUTO"
 	)
 }
@@ -482,27 +480,10 @@ plot_bootstrap <- function(df) {
 	keep <- seq(28, 28 * 30, by = 28 * 4)
 	weeks_f <- sort(keep / 7)
 
-	# good_enough <- df |>
-	# 	group_by(st_name, delta_time, density_cat) |>
-	# 	count() |>
-	# 	ungroup() |>
-	# 	filter(n >= 10) |>
-	# 	select(-n)
-
-	# all_3_cats <- good_enough |>
-	# 	select(st_name, density_cat) |>
-	# 	distinct() |>
-	# 	count(st_name) |>
-	# 	filter(n == 3) |>
-	# 	pull(st_name)
-
-	# df_plot <- left_join(good_enough, df) |>
-	# 	filter(st_name %in% all_3_cats)
-
 	df |>
 		filter(
 			delta_time %in% keep,
-			!st_name %in% c("NORTH CAROLINA", "VIRGINIA")
+			!st_name %in% c("NORTH CAROLINA", "VIRGINIA", "WEST VIRGINIA")
 		) |>
 		mutate(weeks = delta_time / 7, weeks = factor(weeks, levels = weeks_f)) |>
 		ggplot() +
@@ -518,4 +499,62 @@ plot_bootstrap <- function(df) {
 		scale_fill_manual(values = c("With" = "#998ec3", "Without" = "#f1a340")) +
 		theme_bw() +
 		theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+}
+
+plot_effort <- function(mu_lambda, df_actual, model_data_last) {
+	df <- mu_lambda |>
+		rename(lambda = mu) |>
+		select(-n)
+
+	df_epr <- df_actual |>
+		left_join(df) |>
+		filter(!is.na(lambda)) |>
+		mutate(
+			EPR = 1 + (lambda * (mu_prop_take - 1)),
+			epr_cat = if_else(EPR < 0, "[-1 - 0)", "x"),
+			epr_cat = if_else(EPR >= 0 & EPR < 0.5, "[0 - 0.5)", epr_cat),
+			epr_cat = if_else(EPR >= 0.5, "[0.5 - 1]", epr_cat)
+		)
+
+	dat <- model_data_last |>
+		select(propertyID, property_area_km2) |>
+		distinct()
+
+	df_plot <- df_epr |>
+		left_join(dat, by = "propertyID")
+
+	my_box <- function(x) {
+		df_plot |>
+			ggplot() +
+			aes(x = .data[[x]], y = method, color = epr_cat) +
+			labs(color = "EPR") +
+			geom_boxplot(outliers = FALSE) +
+			scale_color_manual(
+				values = c(
+					"[-1 - 0)" = "#fc8d62",
+					"[0 - 0.5)" = "#8da0cb",
+					"[0.5 - 1]" = "#66c2a5"
+				)
+			) +
+			theme_bw() +
+			theme(axis.title.y = element_blank())
+	}
+
+	g1 <- my_box("mu_prop_take") +
+		labs(x = "Average APR", title = "Actual proportion removed")
+	g2 <- my_box("property_area_km2") +
+		labs(x = expression("Property area " ~ (km^2)), title = "Area")
+	g3 <- my_box("mu_total_effort_per") +
+		labs(x = "Average total effort per unit", title = "Effort")
+
+	ggarrange(
+		g1,
+		g2,
+		g3,
+		nrow = 1,
+		common.legend = TRUE,
+		legend = "right",
+		labels = "AUTO",
+		align = "hv"
+	)
 }
