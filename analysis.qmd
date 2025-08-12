@@ -33,7 +33,7 @@ tar_make()
 #| label: fig-trajectory
 #| fig-cap: "Figure shows the change in median wild pig density relative to the initial median density at week 0 over a one-year period. The boxplots represent the median and interquartile range (IQR) of these changes, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed. The Without management scenario (orange) is the result of the boostrapping procedure (see methods section ##), and the With managment scenario (purple) compares median posterior density estimates. The rows represent the density category at week 0, where Low is less than 2 pigs/km2, Medium is between 2-6 pigs/km2, and High is greater than 6 pigs/km2. Note the different y-axis scale for each initial density category."
 
-tar_read("plot_managment")
+tar_read("plot_management")
 
 ```
 
@@ -48,41 +48,109 @@ cat_medians <- df |>
     delta_time == md
   ) |>
   group_by(st_name, density_cat, mgmt) |>
-  summarise(med = median(delta_density), 2) |>
-  ungroup()
+  summarise(
+    med = round(median(delta_density), 1),
+    low = round(quantile(delta_density, 0.05), 1),
+    high = round(quantile(delta_density, 0.95), 1)
+  ) |>
+  ungroup() |>
+  mutate(u = paste0("90% CI: ", low, "-", high))
 
-get_median_changes <- function(df, dc, mc) {
+get_median_changes <- function(df, dc, mc, s) {
   df |>
     filter(
       density_cat == dc,
-      mgmt == mc
+      mgmt == mc,
+      st_name == s
     ) |>
-    filter(med == min(med) | med == max(med)) |>
-    arrange(med) |>
-    mutate(med = round(med, 2))
+    pull(med)
 }
 
-tmp <- cat_medians |> get_median_changes("High", "Without")
-high_wo_states <- tmp$st_name
-high_wo_meds <- tmp$med
+get_u <- function(df, dc, mc, s) {
+  df |>
+    filter(
+      density_cat == dc,
+      mgmt == mc,
+      st_name == s
+    ) |>
+    pull(u)
+}
 
-tmp <- cat_medians |> get_median_changes("High", "With")
-high_with_states <- tmp$st_name
-high_with_meds <- tmp$med
+tx_m_high_wo <- cat_medians |> get_median_changes("High", "Without", "TEXAS")
+tx_m_high_w <- cat_medians |> get_median_changes("High", "With", "TEXAS")
+tx_u_high_wo <- cat_medians |> get_u("High", "Without", "TEXAS")
+tx_u_high_w <- cat_medians |> get_u("High", "With", "TEXAS")
+tx_diff <- tx_m_high_wo - tx_m_high_w
 
-tmp <- cat_medians |> get_median_changes("Low", "Without")
-low_wo_states <- tmp$st_name
-low_wo_meds <- tmp$med
+delta_density <- cat_medians |>
+  select(st_name, density_cat, mgmt, med) |>
+  pivot_wider(names_from = mgmt, values_from = med) |>
+  mutate(delta = Without - With)
 
-tmp <- cat_medians |> get_median_changes("Low", "With")
-low_with_states <- tmp$st_name
-low_with_meds <- tmp$med
+min_delta <- delta_density |>
+  group_by(density_cat) |>
+  filter(delta == min(delta))
+max_delta <- delta_density |>
+  group_by(density_cat) |>
+  filter(delta == max(delta))
+
+get_delta <- function(df, x, c) {
+  df |>
+    filter(density_cat == x) |>
+    pull(all_of(c))
+}
+
+min_low_delta_m <- get_delta(min_delta, "Low", "delta")
+min_med_delta_m <- get_delta(min_delta, "Medium", "delta")
+min_high_delta_m <- get_delta(min_delta, "High", "delta")
+min_low_delta_s <- get_delta(min_delta, "Low", "st_name")
+min_med_delta_s <- get_delta(min_delta, "Medium", "st_name")
+min_high_delta_s <- get_delta(min_delta, "High", "st_name")
+
+max_low_delta_m <- get_delta(max_delta, "Low", "delta")
+max_med_delta_m <- get_delta(max_delta, "Medium", "delta")[1]
+max_high_delta_m <- get_delta(max_delta, "High", "delta")[1]
+max_low_delta_s <- get_delta(max_delta, "Low", "st_name")
+max_med_delta_s <- get_delta(max_delta, "Medium", "st_name")[1]
+max_high_delta_s <- get_delta(max_delta, "High", "st_name")[1]
+
+n_below_0 <- df |>
+  filter(delta_density < 0, delta_time == md) |>
+  group_by(mgmt, density_cat) |>
+  summarise(n_below_0 = n())
+
+n_all <- df |>
+  filter(delta_time == md) |>
+  group_by(mgmt, density_cat) |>
+  summarise(n = n())
+
+pfall <- left_join(n_all, n_below_0) |>
+  mutate(percent_fell = round(n_below_0 / n * 100, 1))
+
+get_p <- function(x, c) {
+  pfall |>
+    filter(
+      density_cat == x,
+      mgmt == c
+    ) |>
+    pull(percent_fell)
+}
+
+p_w_l <- get_p("Low", "With")
+p_wo_l <- get_p("Low", "Without")
+p_w_m <- get_p("Medium", "With")
+p_wo_m <- get_p("Medium", "Without")
+p_w_h <- get_p("High", "With")
+p_wo_h <- get_p("High", "Without")
+
 
 ```
 
-The effect of pig removals was more evident when the initial density was high (@fig-trajectory, bottom row). For example, when initial density was high (i.e. \> 6 pigs/km2) and management did not occur, the range in the change in density over one year was predicted to have a median increase between `r high_wo_meds[1]` and `r high_wo_meds[2]` pigs/km2 for `r high_wo_states[1]` and `r high_wo_states[2]`, respectively. By contrast, when management took place in high density areas, the range in the change in density over one year was observed with a median decrease between `r high_with_meds[1]` and `r high_with_meds[2]` pigs/km2 for `r high_with_states[1]` and `r high_with_states[2]`, respectively.
+The effect of pig removals was more evident when the initial density was high (i.e. \> 6 pigs/km2), and varied across states regardless of initial density (@fig-trajectory). In Texas, for example, there was no change in pig density after one year when the initial density was low (i.e. \< 2 pigs/km2), regardless if management (i.e. pig removals) occurred or not. However, when management occurred and initial density was high, the median change in density after one year was `r tx_m_high_w` (`r tx_u_high_w`), where as the predicted change in density if management did not occur was `r tx_m_high_wo` (`r tx_u_high_wo`). That means that after one year high density properties in Texas that did not conduct pig removals could have wild pig densities that are `r tx_diff` pigs/km2 higher than properties that removed pigs.
 
-When the initial density was low (i.e. \< 2 pigs/km2), the effect of management over a one year period was mixed (@fig-trajectory, top row). For example, when management did not occur, the range in the change in density over one year was predicted to have a median change between `r low_wo_meds[1]` and `r low_wo_meds[2]` pigs/km2 for `r low_wo_states[1]` and `r low_wo_states[2]`, respectively. By contrast, when management took place in low density areas, the range in the change in density over one year was observed with a median between `r low_with_meds[1]` and `r low_with_meds[2]` pigs/km2 for `r low_with_states[1]` and `r low_with_states[2]`, respectively.
+The variation in the effect of management across states increased with each density category. When the initial density was low, the difference between conducting removals and not was between `r min_low_delta_m` and `r max_low_delta_m` pigs/km2 after one year in `r min_low_delta_s` and `r max_low_delta_s`, respectively. When the initial density was between 2-6 pigs/km2 (i.e. medium), the difference between conducting removals and not was between `r min_med_delta_m` and `r max_med_delta_m` pigs/km2 after one year in `r min_med_delta_s` and `r max_med_delta_s`, respectively. When the initial density was high, the difference between conducting removals and not was between `r min_high_delta_m` and `r max_high_delta_m` pigs/km2 after one year in `r min_high_delta_s` and `r max_high_delta_s`, respectively.
+
+Across all bootstrap simulations, `r p_w_l`, `r p_w_m`, and `r p_w_h`percent of properties saw wild pig densities fall after one year while conducting removals for the low, medium, and high initial density scenarios, respectively. This is in contrast to the simulations that did not conduct removals, where `r p_wo_l`, `r p_wo_m`, and `r p_wo_h`percent of properties saw wild pig densities fall after one year for the low, medium, and high initial density scenarios, respectively.
 
 ### Population growth rate
 
@@ -114,6 +182,7 @@ lambda_summary <- df |>
   summarise(
     n = n(),
     med = median(mu),
+    mu_hat = mean(mu),
     sd = sd(mu),
     q1 = quantile(mu, 0.25),
     q3 = quantile(mu, 0.75)
@@ -145,9 +214,30 @@ n_under_1 <- lambda_summary |>
   filter(med < 1) |>
   nrow()
 
+n0 <- df |>
+  filter(mu == 0) |>
+  nrow()
+
 ```
 
-Individual properties exhibited a range of average population growth rates. Across all properties the median population growth rate per 28-day period was `r all_prop_med` (90% CI: `r all_prop_low` - `r all_prop_high`). There was also variation within and across states (@fig-lambda). For example, the median growth rate per 28-day period ranged from `r low_lambda` to `r high_lambda` for `r state_low` and `r state_high`, respectively. The standard deviation of growth rates within each state ranged from `r low_lambda_sd` to `r high_lambda_sd` for `r state_low_sd` and `r state_high_sd`, respectively. There were `r n_under_1` states where at least half of their properties had a declining population (growth rate under one), and `r percent_declining`% of all properties (n=`r n_declining`) had a declining population.
+```{r}
+#| label: tbl-lambda
+#| tbl-cap: The mean and standard deviation (SD) of average property growth rates across properties in each state (n is the number of properties in each state).
+
+lambda_summary |>
+  rename(
+    State = st_name,
+    Mean = mu_hat,
+    SD = sd
+  ) |>
+  mutate(Mean = round(Mean, 2), SD = round(SD, 2)) |>
+  select(State, Mean, SD, n) |>
+  arrange(desc(Mean)) |>
+  knitr::kable()
+
+```
+
+Individual properties exhibited a range of average population growth rates in the presence of removal activities. Across all properties the median population growth rate per 28-day period was `r all_prop_med` (90% CI: `r all_prop_low` - `r all_prop_high`). Meaning just over half (`r percent_declining`%, n=`r n_declining`) of the properties had declining populations, which includes the effect of management activities. There was variation within and across states (@fig-lambda). For example, the median growth rate per 28-day period ranged from `r low_lambda` to `r high_lambda` for `r state_low` and `r state_high`, respectively. Additionaly, there were `r n_under_1` states where at least half of their properties had a declining population (@tbl-lambda). Finally, there were `r n0` properties with a growth rate of zero, which are properties that eradicated wild pigs between their first and second primary periods with removal events.
 
 ### Proportion removed
 
@@ -168,9 +258,9 @@ by_state <- function(df) {
   df |>
     group_by(method, st_name) |>
     summarise(
-      med = median(mu),
-      low = quantile(mu, 0.05),
-      high = quantile(mu, 0.95)
+      med = median(mu_prop_take),
+      low = quantile(mu_prop_take, 0.05),
+      high = quantile(mu_prop_take, 0.95)
     ) |>
     ungroup()
 }
@@ -182,8 +272,7 @@ grid_search <- expand_grid(
   goal = c(0, 0.5) # 0 is no change, 1 would be elimination
 ) |>
   filter(goal + lambda >= 1) |>
-  mutate(needed = -1 * (((1 - goal) - lambda) / lambda))
-
+  mutate(needed = (lambda - (1 - goal)) / lambda)
 
 tx_heli <- a_by_state |>
   filter(method == "Helicopter", st_name == "TEXAS")
@@ -192,26 +281,460 @@ tx_heli_med <- round(tx_heli$med, 2)
 tx_heli_low <- round(tx_heli$low, 2)
 tx_heli_high <- round(tx_heli$high, 2)
 
-get_example <- function(g) {
-  grid_search |>
-    mutate(needed = round(needed, 2)) |>
-    filter(
-      goal == g,
-      needed == tx_heli_med
-    ) |>
-    pull(lambda) |>
-    mean() |>
-    round(2)
+get_example <- function(x, g) {
+  round(-1 * (1 - g) / (x - 1), 2)
 }
 
-tx_0 <- get_example(0)
-tx_0.5 <- get_example(0.5)
+tx_0 <- get_example(tx_heli_med, 0)
+tx_0.5 <- get_example(tx_heli_med, 0.5)
+
+tx_lambda <- lambda_summary |>
+  filter(st_name == "TEXAS")
+tx_lambda_mu <- tx_lambda$mu_hat
+tx_lambda_sd <- tx_lambda$sd
+
+p_lower_0 <- round(pnorm(tx_0, tx_lambda_mu, tx_lambda_sd) * 100, 1)
+p_lower_0.5 <- round(pnorm(tx_0.5, tx_lambda_mu, tx_lambda_sd) * 100, 1)
+
+epr <- function(apr, lambda) {
+  1 + (lambda * (apr - 1))
+}
+
+epr(0.5, 1) # 0.5
+epr(0.5, 2) # 0
+epr(0.5, 0.5) # 0.75
+epr(0, 2) #
+
+tx_heli_epr <- epr(tx_heli_med, tx_lambda_mu)
 
 
-pnorm(0.67, 0.978, 0.323)
-pnorm(0.784, 0.978, 0.323)
 ```
 
-Here, we focus on the proportion of the population removed for properties that have growing populations because we are interested in how removals might be used to reach a management goal (i.e. a 50% reduction in abundance), and what amount of the population that needs to be removed to reach that goal. This only makes sense for growing populations
+Here, we focus on the proportion of the population removed by method and state (@fig-removals A), which must be interpreted with respect to population growth rate (@fig-removals B). 
+For example, in Texas the median proportion of the population removed in a single primary period by helicopters was `r tx_heli_med` (90% CI `r tx_heli_low` - `r tx_heli_high`; @fig-removals A). 
+If the managment goal was to at least maintain the population at its current level, then the population growth rate would have to be under `r tx_0` to achieve this goal (@fig-removals B). If, however, the goal was to reduce the population by half, then the growth rate would have to be under `r tx_0.5`, which corresponds to approximately `r p_lower_0.5`% of properties in Texas. In other words, reducing the population by half
 
-To interpret @fig-removals, we start with a specific example to explain how to interpret the data, and then later we report the findings at large. For the specific example, let's look at Texas. The median proportion of the population removed in a single primary period, by helicopters (from @fig-removals A) was `r tx_heli_med` (90% CI `r tx_heli_low` - `r tx_heli_high`). If the population was growing, and the management goal was to at maintain the population at its current level, then the population growth rate would have to be under `r tx_0` to achieve this goal (@fig-removals B). If, however, the goal was to reduce the population by half, then the growth rate would have to be under `r tx_0.5`.
+```{r}
+
+trap <- a_by_state |>
+  filter(method == "Trap")
+
+n_0_trap <- trap |>
+  filter(med == 0) |>
+  nrow()
+
+trap_max <- trap |>
+  filter(med == max(med))
+
+snare <- a_by_state |>
+  filter(method == "Snare")
+
+n_0_snare <- snare |>
+  filter(med == 0) |>
+  nrow()
+
+snare_max <- snare |>
+  filter(med == max(med))
+
+shoot <- a_by_state |>
+  filter(
+    method == "Sharpshooting",
+    med != high
+  )
+
+shoot_min <- shoot |> filter(med == min(med))
+shoot_max <- shoot |> filter(med == max(med))
+
+fw <- a_by_state |>
+  filter(
+    method == "Fixed wing",
+    med != high
+  )
+
+fw_min <- fw |> filter(med == min(med))
+fw_max <- fw |> filter(med == max(med))
+
+heli <- a_by_state |>
+  filter(
+    method == "Helicopter",
+    med != high
+  )
+
+heli_min <- heli |> filter(med == min(med))
+heli_max <- heli |> filter(med == max(med))
+
+```
+
+Across states, there were `r n_0_trap` states where the median proportion of the population removed by traps was zero. The maximum came from `r trap_max$st_name` with a median of `r round(trap_max$med, 2)` (90% CI: `r round(trap_max$low, 2)` - `r round(trap_max$high, 2)`). For snares, there were `r n_0_snare` states where the median proportion of the population removed was zero. The maximum came from `r snare_max$st_name` with a median of `r round(snare_max$med, 2)` (90% CI: `r round(snare_max$low, 2)` - `r round(snare_max$high, 2)`). For sharpshooting, the range in the median proportion of the populatino removed was between `r round(shoot_min$med, 2)` (90% CI: `r round(shoot_min$low, 2)` - `r round(shoot_min$high, 2)`) and `r round(shoot_max$med, 2)` (90% CI: `r round(shoot_max$low, 2)` - `r round(shoot_max$high, 2)`) for `r shoot_min$st_name` and `r shoot_max$st_name`, respectively. There were two states that used fixed wing aircraft, which removed a proportion between `r round(fw_min$med, 2)` (90% CI: `r round(fw_min$low, 2)` - `r round(fw_min$high, 2)`) and `r round(fw_max$med, 2)` (90% CI: `r round(fw_max$low, 2)` - `r round(fw_max$high, 2)`) for `r fw_min$st_name` and `r fw_max$st_name`, respectively. Lastly, for helicopters, the range in the median proportion of the populatino removed was between `r round(heli_min$med, 2)` (90% CI: `r round(heli_min$low, 2)` - `r round(heli_min$high, 2)`) and `r round(heli_max$med, 2)` (90% CI: `r round(heli_max$low, 2)` - `r round(heli_max$high, 2)`) for `r heli_min$st_name` and `r heli_max$st_name`, respectively.
+
+
+
+```{r}
+#| label: fig-epr
+#| fig-cap: A) The average actual proportion of the population removed by each method in each property. B) The area of each property where methods where used. C) The average total effort per unit deployed for each method in each property. Effort is the number of trap nights for traps and snares, the number of hours spent sharpshooting, and hours flown in Hobbs hours for helicopters and fixed wing aircraft. The color of each boxplot refers to the effective proportion of the population removed (EPR) given the average growth rate of the property where the method was deployed. The boxplots represent the median and interquartile range (IQR) of each variable, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed.
+
+tar_read("plot_epr")
+
+```
+
+
+
+```{r}
+
+calculate_lambda_needed <- function(df, g, prop_rem_col) {
+  df |>
+    mutate(
+      goal = g,
+      lambda_needed = (g - 1) / (.data[[prop_rem_col]] - 1),
+      lambda_needed = round(lambda_needed, 2)
+    )
+}
+
+g0_all <- df_actual |> calculate_lambda_needed(0, "mu_prop_take")
+g0.5_all <- df_actual |> calculate_lambda_needed(0.5, "mu_prop_take")
+
+g0_all2 <- g0_all |>
+  select(propertyID, method, lambda_needed) |>
+  rename(lambda_needed_0 = lambda_needed)
+g0.5_all2 <- g0.5_all |>
+  select(propertyID, method, lambda_needed) |>
+  rename(lambda_needed_0.5 = lambda_needed)
+
+all_lambda_needed <- left_join(g0_all2, g0.5_all2)
+
+df_actual_lambda_needed <- left_join(df_actual, all_lambda_needed)
+
+df_property_method <- df_actual |>
+  select(propertyID, method) |>
+  unique()
+
+df <- tar_read("mu_lambda")
+
+lambda_by_method <- left_join(df_property_method, df) |>
+  filter(!is.na(mu)) |>
+  rename(lambda_actual = mu)
+
+df_actual_lambda_join <- left_join(df_actual_lambda_needed, lambda_by_method)
+
+lambda_filter <- df_actual_lambda_join |>
+  filter(!is.na(lambda_actual)) |>
+  mutate(
+    maintenance_2_half = if_else(lambda_actual <= lambda_needed_0 &
+      lambda_actual > lambda_needed_0.5, TRUE, FALSE),
+    half = if_else(lambda_actual <= lambda_needed_0.5, TRUE, FALSE),
+    check = if_else(half & maintenance_2_half, FALSE, TRUE)
+  )
+
+all(lambda_filter$check)
+
+g0_filter <- left_join(lambda_by_method, g0_all) |>
+  filter(lambda_actual <= lambda_needed)
+g0.5_filter <- left_join(lambda_by_method, g0.5_all) |>
+  filter(lambda_actual <= lambda_needed)
+
+# lambda_by_method_2 <- lambda_by_method |>
+#   group_by(method) |>
+#   summarise(
+#     mu_hat = mean(mu),
+#     sd_hat = sd(mu)
+#   ) |>
+#   ungroup()
+
+summarise_property <- function(df1, df2) {
+  bind_rows(df1, df2) |>
+    group_by(method, goal) |>
+    summarise(
+      n = n(),
+      med_lambda = round(median(lambda_needed), 2),
+      low_lambda = round(quantile(lambda_needed, 0.05), 2),
+      high_lambda = round(quantile(lambda_needed, 0.95), 2),
+      med_prop_take = round(median(mu_prop_take), 2),
+      low_prop_take = round(quantile(mu_prop_take, 0.05), 2),
+      high_prop_take = round(quantile(mu_prop_take, 0.95), 2),
+      med_prop_take = round(median(mu_prop_take), 2),
+      low_prop_take = round(quantile(mu_prop_take, 0.05), 2),
+      high_prop_take = round(quantile(mu_prop_take, 0.95), 2),
+      med_total_effort = round(median(mu_total_effort), 2),
+      low_total_effort = round(quantile(mu_total_effort, 0.05), 2),
+      high_total_effort = round(quantile(mu_total_effort, 0.95), 2),
+      med_total_effort_per = round(median(mu_total_effort_per), 2),
+      low_total_effort_per = round(quantile(mu_total_effort_per, 0.05), 2),
+      high_total_effort_per = round(quantile(mu_total_effort_per, 0.95), 2),
+      med_total_trap_count = round(median(mu_total_trap_count), 2),
+      low_total_trap_count = round(quantile(mu_total_trap_count, 0.05), 2),
+      high_total_trap_count = round(quantile(mu_total_trap_count, 0.95), 2)
+    ) |>
+    ungroup()
+}
+
+property_stats <- summarise_property(g0_filter, g0.5_filter)
+
+# all_under <- property_stats |>
+#   left_join(lambda_by_method_2) |>
+#   mutate(
+#     percent_under = round(
+#       pnorm(med_lambda, mu_hat, sd_hat) * 100,
+#       1
+#     )
+#   )
+
+my_paste0 <- function(med, low, high) {
+  paste0(med, " (", low, "-", high, ")")
+}
+
+all_under_names <- property_stats |>
+  mutate(
+    Goal = if_else(goal == 0, "Maintenance", "50% reduction"),
+    `Growth rate` = my_paste0(
+      med_lambda,
+      low_lambda,
+      high_lambda
+    ),
+    `Proportion removed` = my_paste0(
+      med_prop_take,
+      low_prop_take,
+      high_prop_take
+    ),
+    `Effort` = my_paste0(
+      med_total_effort,
+      low_total_effort,
+      high_total_effort
+    ),
+    `Units deployed` = my_paste0(
+      med_total_trap_count,
+      low_total_trap_count,
+      high_total_trap_count
+    ),
+    `Effort per unit` = my_paste0(
+      med_total_effort_per,
+      low_total_effort_per,
+      high_total_effort_per
+    )
+  ) |>
+  rename(
+    Method = method
+  ) |>
+  select(Method, Goal, `Proportion removed`, Effort, `Units deployed`, `Effort per unit`, `Growth rate`, n)
+
+```
+
+#### Maintenance
+
+```{r}
+#| label: tbl-maintenanceAll
+#| tbl-cap: "For each method, Proportion removed is the median proportion of the population removed across properties. Growth rate is the maximum population growth rate allowed so that a specific method could theoreticaly maintain the populution given the proportion removed. Summary statistics reported (median and 90% credible interval). The percentage of properties in the data set that meet this criteria are reported."
+
+goal_cols <- c(
+  "Method", "Proportion removed", "Growth rate", "n"
+)
+
+all_under_names |>
+  filter(Goal == "Maintenance") |>
+  arrange(Method) |>
+  select(-Goal) |>
+  knitr::kable()
+```
+
+#### 50% reduction
+
+```{r}
+#| label: tbl-reduce50All
+#| tbl-cap: "For each method, Proportion removed is the median proportion of the population removed across properties. Growth rate is the maximum population growth rate allowed so that a specific method could theoreticaly reduce the population by half given the proportion removed. Summary statistics reported (median and 90% credible interval). The percentage of properties in the data set that meet this criteria are reported."
+
+all_under_names |>
+  filter(Goal == "50% reduction") |>
+  arrange(Method) |>
+  select(-Goal) |>
+  knitr::kable()
+
+```
+
+```{r}
+#| label: tbl-reduceByState
+#| tbl-cap: "The values for each method represent the growth rate (and percent of properties) that is required to reach each management goal, given the proportion of the population removed across properties in each state."
+g0 <- a_by_state |> calculate_lambda_needed(0, "med")
+g0.5 <- a_by_state |> calculate_lambda_needed(0.5, "med")
+
+lambda_summary_2 <- lambda_summary |>
+  select(st_name, mu_hat, sd)
+
+p_under <- bind_rows(g0, g0.5) |>
+  left_join(lambda_summary_2) |>
+  mutate(percent_under = round(pnorm(lambda_needed, mu_hat, sd) * 100, 1)) |>
+  select(method, st_name, percent_under, goal, lambda_needed) |>
+  rename(
+    lambda = lambda_needed,
+    State = st_name,
+    Goal = goal
+  ) |>
+  mutate(
+    Goal = if_else(Goal == 0, "Maintenance", "50% reduction"),
+    x = paste0(lambda, " (", percent_under, ")")
+  ) |>
+  select(-percent_under, -lambda)
+
+p_under |>
+  pivot_wider(names_from = method, values_from = x) |>
+  arrange(State, Goal) |>
+  knitr::kable()
+
+
+```
+
+```{r}
+grid_search <- expand_grid(
+  lambda = seq(0.5, 2, by = 0.01),
+  goal = c(0, 0.5, 1) # 1 is elimination, zero is no change
+) |>
+  filter(goal + lambda >= 1) |>
+  mutate(needed = -1 * (((1 - goal) - lambda) / lambda))
+
+grid_search |>
+  mutate(
+    goal_cat = if_else(goal == 0, "Maintenance", "Eradication"),
+    goal_cat = if_else(goal == 0.5, "50% reduction", goal_cat),
+    goal_cat = factor(goal_cat, levels = c("Maintenance", "50% reduction", "Eradication"))
+  ) |>
+  ggplot() +
+  aes(y = needed, x = lambda, color = goal_cat) +
+  geom_line(linewidth = 3) +
+  scale_color_viridis_d() +
+  labs(
+    y = "Proportion of individuals needed to be removed",
+    x = "Populuation growth rate per 28-days",
+    color = "Management\ngoal"
+  ) +
+  theme_bw()
+```
+
+```         
+dat <- tar_read("model_data_last")
+dat_take <- dat |>
+  group_by(propertyID, end_dates, method) |>
+  summarise(
+    take = sum(take),
+    effort = sum(effort),
+    trap_count = sum(trap_count)
+  ) |>
+  ungroup()
+
+areas <- dat |>
+  select(propertyID, property_area_km2) |>
+  unique()
+
+df <- tar_read("realized_growth")
+glimpse(df)
+
+
+left_join(df, areas) |>
+  filter(abundance_estimate > 0) |>
+  mutate(
+    density = abundance_estimate / property_area_km2,
+    log_density = log(density)
+  ) |>
+  ggplot() +
+  aes(x = density, y = lambda) +
+  geom_point(alpha = 0.1) +
+  geom_smooth() +
+  theme_bw()
+
+t2 <- df |>
+  count(propertyID) |>
+  filter(n >= 2) |>
+  pull(propertyID)
+
+lambda_tp1 <- df |>
+  select(propertyID, end_dates, st_name, total_take, abundance_estimate, lambda)
+
+tmp <- left_join(dat_take, lambda_tp1) |>
+  filter(!is.na(lambda)) |>
+  mutate(
+    percent_take = take / abundance_estimate,
+    log_take_p1 = log(take + 1),
+    log_n_p1 = log(abundance_estimate + 1),
+  )
+
+tmp2 <- tmp |>
+  mutate(method = "All")
+
+dfp <- bind_rows(tmp, tmp2)
+
+plot_lambda_tp1 <- function(x, xlab) {
+  a <- dfp |>
+    ggplot() +
+    aes(x = .data[[x]], y = lambda_tp1, color = method) +
+    geom_smooth(alpha = 0.1) +
+    geom_hline(yintercept = 1, linetype = "dashed") +
+    labs(
+      x = xlab,
+      y = "Growth rate at time t + 1",
+      color = "Method"
+    ) +
+    theme_bw()
+
+  b <- dfp |>
+    ggplot() +
+    aes(x = .data[[x]], y = delta_lambda, color = method) +
+    geom_smooth(alpha = 0.1) +
+    # geom_point(alpha = 0.1) +
+    # facet_grid(cols = vars(method)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    labs(
+      x = xlab,
+      y = "Change in growth rate from time t to t + 1",
+      color = "Method"
+    ) +
+    theme_bw()
+
+  ggarrange(a, b, nrow = 1, common.legend = TRUE, legend = "right")
+}
+
+library(mgcv)
+
+tmp_gam <- tmp |>
+  filter(!is.na(percent_take)) |>
+  mutate(
+    c_lambda = (lambda - mean(lambda)) / sd(lambda),
+    c_trap_count = (trap_count - mean(trap_count)) / sd(trap_count),
+    c_effort = (effort - mean(effort)) / sd(effort),
+    c_percent_take = (percent_take - mean(percent_take)) / sd(percent_take),
+    c_take = (take - mean(take)) / sd(take),
+    method = factor(method),
+    st_name = factor(st_name)
+  )
+
+fit <- gam(
+  lambda ~
+    s(c_percent_take) +
+    s(c_percent_take, c_trap_count) +
+    s(log_take_p1) +
+    s(c_effort) +
+    s(c_trap_count) +
+    s(method, bs = "re") +
+    s(st_name, bs = "re"),
+  method = "REML",
+  data = tmp_gam
+)
+
+summary(fit)
+
+
+k.check(fit)
+gam.check(fit)
+```
+
+### Does removing more of a population change growth rate?
+
+```         
+x <- "percent_take"
+xlab <- "Proportion removed at time t"
+plot_lambda_tp1(x, xlab)
+```
+
+### Does removing more individuals change growth rate?
+
+```         
+x <- "log_take_p1"
+xlab <- "log(individuals removed + 1) at time t"
+plot_lambda_tp1(x, xlab)
+```
