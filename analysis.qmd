@@ -252,7 +252,36 @@ tar_read("plot_prop_take")
 ```{r}
 #| label: proportion take
 df_actual <- tar_read("actual_percent_take")
-df_theoretical <- tar_read("theoretical_percent_take")
+df_lambda <- tar_read("mu_lambda") |>
+  rename(lambda = mu) |>
+  select(-n)
+
+df_epr <- left_join(df_actual, df_lambda) |>
+  filter(!is.na(lambda)) |>
+  mutate(epr = 1 + (lambda * (mu_prop_take - 1)))
+
+calc_epr <- function(lambda, apr) 1 + (lambda * (apr - 1))
+
+calc_epr(1, 0.5)
+calc_epr(1, 1)
+calc_epr(0.5, 0.5)
+calc_epr(2, 1)
+calc_epr(1.5, 0.25)
+
+epr_by_st_method <- df_epr |>
+  group_by(st_name, method) |>
+  summarise(
+    med = round(median(epr), 2),
+    low = round(quantile(epr, 0.05), 2),
+    high = round(quantile(epr, 0.95), 2)
+  ) |>
+  ungroup()
+
+tx_epr_heli <- epr_by_st_method |>
+  filter(method == "Helicopter", st_name == "TEXAS")
+tx_epr_heli_med <- tx_epr_heli$med
+tx_epr_heli_low <- tx_epr_heli$low
+tx_epr_heli_high <- tx_epr_heli$high
 
 by_state <- function(df) {
   df |>
@@ -266,13 +295,6 @@ by_state <- function(df) {
 }
 
 a_by_state <- by_state(df_actual)
-
-grid_search <- expand_grid(
-  lambda = seq(0.5, 1.5, by = 0.001),
-  goal = c(0, 0.5) # 0 is no change, 1 would be elimination
-) |>
-  filter(goal + lambda >= 1) |>
-  mutate(needed = (lambda - (1 - goal)) / lambda)
 
 tx_heli <- a_by_state |>
   filter(method == "Helicopter", st_name == "TEXAS")
@@ -290,29 +312,61 @@ tx_0.5 <- get_example(tx_heli_med, 0.5)
 
 tx_lambda <- lambda_summary |>
   filter(st_name == "TEXAS")
-tx_lambda_mu <- tx_lambda$mu_hat
-tx_lambda_sd <- tx_lambda$sd
+tx_lambda_med <- tx_lambda$med
 
-p_lower_0 <- round(pnorm(tx_0, tx_lambda_mu, tx_lambda_sd) * 100, 1)
-p_lower_0.5 <- round(pnorm(tx_0.5, tx_lambda_mu, tx_lambda_sd) * 100, 1)
+# p_lower_0 <- round(pnorm(tx_0, tx_lambda_mu, tx_lambda_sd) * 100, 1)
+# p_lower_0.5 <- round(pnorm(tx_0.5, tx_lambda_mu, tx_lambda_sd) * 100, 1)
 
 epr <- function(apr, lambda) {
   1 + (lambda * (apr - 1))
 }
 
-epr(0.5, 1) # 0.5
-epr(0.5, 2) # 0
-epr(0.5, 0.5) # 0.75
-epr(0, 2) #
-
-tx_heli_epr <- epr(tx_heli_med, tx_lambda_mu)
+tx_heli_epr <- epr(tx_heli_med, tx_lambda_med)
 
 
 ```
 
 Here, we focus on the proportion of the population removed by method and state (@fig-removals A), which must be interpreted with respect to population growth rate (@fig-removals B). 
-For example, in Texas the median proportion of the population removed in a single primary period by helicopters was `r tx_heli_med` (90% CI `r tx_heli_low` - `r tx_heli_high`; @fig-removals A). 
-If the managment goal was to at least maintain the population at its current level, then the population growth rate would have to be under `r tx_0` to achieve this goal (@fig-removals B). If, however, the goal was to reduce the population by half, then the growth rate would have to be under `r tx_0.5`, which corresponds to approximately `r p_lower_0.5`% of properties in Texas. In other words, reducing the population by half
+For example, in Texas the median proportion of the population removed (APR) in a single primary period by helicopters was `r tx_heli_med` (90% CI `r tx_heli_low` - `r tx_heli_high`; @fig-removals A). 
+Given the distribution of growth rates across properties in Texas, the EPR of helicopters in Texas was `r tx_epr_heli_med` (90% CI `r tx_epr_heli_low` - `r tx_epr_heli_high`). 
+
+
+
+```{r}
+#| label: tbl-aprEpr
+#| tbl-cap: "The actual proportion of the population removed (APR) and the effective proportion of the population remove (EPR) across properties that used each method in each state. Negative EPR indicates the population is expected to grow. The units represent the distribution of APR and EPR given the number of properties (n) that used the method in each state. For one property we show the single value, between two and ten properties we show the range, and for ten or more properties we show the median and 90% confidence interval."
+
+df_epr |>
+  select(method, st_name, mu_prop_take, epr) |>
+  rename(APR = mu_prop_take, EPR = epr) |>
+  pivot_longer(cols = c(APR, EPR), names_to = "metric") |>
+  group_by(method, st_name, metric) |>
+  summarise(
+    med = round(median(value), 2),
+    low = round(quantile(value, 0.05), 2),
+    high = round(quantile(value, 0.95), 2),
+    min = round(min(value), 2),
+    max = round(max(value), 2),
+    n = n()
+  ) |>
+  ungroup() |>
+  mutate(
+    dist = if_else(n == 1, as.character(med), paste0("[", min, "-", max, "]")),
+    Units = if_else(n == 1, "Value", "Range"),
+    dist = if_else(n >= 10, paste0(med, " (", low, "-", high, ")"), dist),
+    Units = if_else(n >= 10, "Median (90% C.I.)", Units)
+  ) |>
+  select(-med, -low, -high, -min, -max) |>
+  distinct() |>
+  pivot_wider(names_from = metric, values_from = dist) |>
+  rename(State = st_name, Method = method) |>
+  select(State, Method, APR, EPR, Units, n) |>
+  arrange(State, Method) |>
+  knitr::kable()
+
+
+```
+
 
 ```{r}
 
