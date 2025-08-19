@@ -33,3 +33,14 @@ ggsave(
 	units = "in",
 	dpi = 300
 )
+
+g <- tar_read("plot_epr")
+
+ggsave(
+	filename = "plots/epr_effort_compAdditive.jpeg",
+	plot = g,
+	width = 12,
+	height = 10,
+	units = "in",
+	dpi = 300
+)
