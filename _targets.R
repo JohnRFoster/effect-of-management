@@ -105,4 +105,15 @@ list(
     name = plot_epr,
     command = plot_effort(mu_lambda, actual_percent_take, model_data_last)
   )
+
+  # tar_target(
+  #   name = write_figures_script,
+  #   command = "write_figures.R",
+  #   format = "file"
+  # ),
+  #
+  # tar_target(
+  #   name = write_figures,
+  #   command = source(write_figures_script, local = TRUE)
+  # )
 )
