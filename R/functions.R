@@ -13,7 +13,10 @@ fix_method_names <- function(df) {
 			method = if_else(method == "HELICOPTER", "Helicopter", method),
 			method = if_else(method == "SNARE", "Snare", method),
 			method = if_else(method == "TRAPS", "Trap", method)
-		)
+		) |>
+		left_join(state_names, by = "st_name") |>
+		select(-st_name) |>
+		rename(st_name = state)
 }
 
 
@@ -173,8 +176,8 @@ calculate_realized_r <- function(df) {
 	calculate_lambda(data_for_growth)
 }
 
-## the mean population growth rate for each property ----
-## separated by state
+# the mean population growth rate for each property ----
+# separated by state
 mean_growth <- function(df) {
 	df |>
 		group_by(propertyID, st_name) |>
@@ -271,7 +274,7 @@ prop_take_by_method <- function(df, df_density) {
 plot_percent_take <- function(df_actual) {
 	tmp <- bind_rows(df_actual) |>
 		# removing these states because their properties are all declining
-		filter(!st_name %in% c("NORTH CAROLINA", "VIRGINIA", "WEST VIRGINIA"))
+		filter(!st_name %in% c("North Carolina", "Virginia", "West Virginia"))
 
 	plot_states <- function(df) {
 		ta <- df |>
@@ -305,39 +308,7 @@ plot_percent_take <- function(df_actual) {
 			theme_bw()
 	}
 
-	g1 <- plot_states(tmp)
-
-	# grid_search <- expand_grid(
-	# 	lambda = seq(0.5, 2, by = 0.001),
-	# 	goal = c(0, 0.5, 1) # 0 is no change, 1 would be elimination
-	# ) |>
-	# 	filter(goal + lambda >= 1) |>
-	# 	mutate(needed = (lambda - (1 - goal)) / lambda)
-
-	g2 <- expand_grid(
-		apr = seq(0, 1, by = 0.05),
-		lambda = seq(0, 2, by = 0.05)
-	) |>
-		mutate(epr = 1 + (lambda * (apr - 1))) |>
-		ggplot() +
-		aes(x = lambda, y = apr, fill = epr) +
-		geom_tile() +
-		scale_fill_gradientn(colors = c("#b2182b", "#f7f7f7", "#2166ac")) +
-		labs(
-			y = "Actual proportion of individuals removed",
-			x = "Populuation growth rate per 28-days",
-			fill = "Effective proportion\nof individuals removed"
-		) +
-		theme_bw()
-
-	ggarrange(
-		g1,
-		g2,
-		ncol = 2,
-		widths = c(3, 2),
-		# align = "hv",
-		labels = "AUTO"
-	)
+	plot_states(tmp)
 }
 
 run_bootstrap <- function(
@@ -511,13 +482,14 @@ plot_effort <- function(mu_lambda, df_actual, model_data_last) {
 		filter(!is.na(lambda)) |>
 		mutate(
 			EPR = 1 + (lambda * (mu_prop_take - 1)),
-			epr_cat = if_else(EPR < 0, "[-1 - 0)", "x"),
-			epr_cat = if_else(EPR >= 0 & EPR < 0.5, "[0 - 0.5)", epr_cat),
-			epr_cat = if_else(EPR >= 0.5, "[0.5 - 1]", epr_cat)
+			epr_cat = if_else(EPR < 0, "Grow", "Shrink"),
+			epr_cat = if_else(EPR >= 0.5, "Slash", epr_cat)
+			# epr_cat = if_else(EPR <= 0, "Grow", "Shrink")
 		)
 
 	dat <- model_data_last |>
 		select(propertyID, property_area_km2) |>
+		# mutate(property_area_km2 = log(property_area_km2)) |>
 		distinct()
 
 	df_plot <- df_epr |>
@@ -527,13 +499,13 @@ plot_effort <- function(mu_lambda, df_actual, model_data_last) {
 		df_plot |>
 			ggplot() +
 			aes(x = .data[[x]], y = method, color = epr_cat) +
-			labs(color = "EPR") +
+			labs(color = "Population\ntrajectory") +
 			geom_boxplot(outliers = FALSE) +
 			scale_color_manual(
 				values = c(
-					"[-1 - 0)" = "#fc8d62",
-					"[0 - 0.5)" = "#8da0cb",
-					"[0.5 - 1]" = "#66c2a5"
+					"Grow" = "#b2182b",
+					"Shrink" = "#92c5de",
+					"Slash" = "#2166ac"
 				)
 			) +
 			theme_bw() +
@@ -541,20 +513,65 @@ plot_effort <- function(mu_lambda, df_actual, model_data_last) {
 	}
 
 	g1 <- my_box("mu_prop_take") +
-		labs(x = "Average APR", title = "Actual proportion removed")
+		labs(x = "Average APR", title = "APR")
 	g2 <- my_box("property_area_km2") +
+		scale_x_log10() +
 		labs(x = expression("Property area " ~ (km^2)), title = "Area")
 	g3 <- my_box("mu_total_effort_per") +
+		scale_x_log10() +
 		labs(x = "Average total effort per unit", title = "Effort")
 
-	ggarrange(
+	gg <- ggarrange(
 		g1,
 		g2,
 		g3,
 		nrow = 1,
 		common.legend = TRUE,
 		legend = "right",
-		labels = "AUTO",
+		labels = c("A", "B", "C"),
 		align = "hv"
+	)
+
+	d1 <- expand_grid(
+		epr = c(0, 0.5),
+		lambda = seq(0, 2, by = 0.01)
+	) |>
+		mutate(apr = (epr + lambda - 1) / lambda) |>
+		filter(apr >= 0, apr <= 1) |>
+		mutate(
+			epr_cat = if_else(epr == 0, "Maintenance", "50% reduction")
+		)
+
+	g4 <- expand_grid(
+		apr = seq(0, 1, by = 0.05),
+		lambda = seq(0, 2, by = 0.05)
+	) |>
+		mutate(epr = 1 + (lambda * (apr - 1))) |>
+		ggplot() +
+		aes(x = lambda, y = apr, fill = epr) +
+		geom_tile() +
+		geom_line(
+			data = d1,
+			aes(x = lambda, y = apr, linetype = epr_cat),
+			size = 1
+		) +
+		scale_fill_gradientn(colors = c("#b2182b", "#f7f7f7", "#2166ac")) +
+		scale_linetype_manual(
+			values = c("Maintenance" = "dashed", "50% reduction" = "dotted")
+		) +
+		labs(
+			y = "APR",
+			x = "Populuation growth rate per 28-days",
+			fill = "Effective proportion\nof individuals removed",
+			linetype = "Management goal"
+		) +
+		theme_bw()
+
+	ggarrange(
+		gg,
+		g4,
+		nrow = 2,
+		labels = c("", "D"),
+		heights = c(2, 1)
 	)
 }
