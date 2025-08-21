@@ -102,8 +102,13 @@ list(
   ),
 
   tar_target(
+    name = epr_data,
+    command = make_epr_data(mu_lambda, actual_percent_take, model_data_last)
+  ),
+
+  tar_target(
     name = plot_epr,
-    command = plot_effort(mu_lambda, actual_percent_take, model_data_last)
+    command = plot_effort(epr_data)
   )
 
   # tar_target(
