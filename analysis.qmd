@@ -243,7 +243,7 @@ Individual properties exhibited a range of average population growth rates in th
 
 ```{r}
 #| label: fig-removals
-#| fig-cap: "The boxplots in panel A are drawn around the mean proportion of the population removed by method at each property. Boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR with outliers shown. Panel B shows the theoretical proportion of the population that needs to be removed given the management goal and population growth rate (equation ##)."
+#| fig-cap: "Summary of the avearge proportion of the population removed by method at the property level. Boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR."
 
 tar_read("plot_prop_take")
 
@@ -425,10 +425,66 @@ Across states, there were `r n_0_trap` states where the median proportion of the
 
 ```{r}
 #| label: fig-epr
-#| fig-cap: A) The average actual proportion of the population removed by each method in each property. B) The area of each property where methods where used. C) The average total effort per unit deployed for each method in each property. Effort is the number of trap nights for traps and snares, the number of hours spent sharpshooting, and hours flown in Hobbs hours for helicopters and fixed wing aircraft. The color of each boxplot refers to the effective proportion of the population removed (EPR) given the average growth rate of the property where the method was deployed. The boxplots represent the median and interquartile range (IQR) of each variable, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed.
+#| fig-cap: A) The average actual proportion of the population removed (APR) by each method in each property. B) The area of each property where methods where used. C) The average total effort per unit deployed for each method in each property. D) The theoretical expected proportion of the population remaining (EPR) given growth rate and APR. A value of 1 indicates eradication, 0 indicates no change, and -1 indicates a populattion expected to double. The dashed line shos the threshold at which populations are expected to grow or increase, and the dotted line shows the threshold at which populations are expected to reduce by more (slash) or less (shrink) than half. For A-C, the data are grouped into the EPR given the average growth rate of the property where the method was deployed. Events the led to population growth are in red, events that lead to a shrinking population are in light blue, and events that lead to a slashing population are in dark blue.
 
 tar_read("plot_epr")
 
+```
+
+
+```{r}
+
+df <- tar_read("epr_data")
+
+make_epr_summaries <- function(df, y) {
+  df |>
+    group_by(method, epr_cat) |>
+    summarise(
+      med = as.character(round(median(.data[[y]]), 2)),
+      low = round(quantile(.data[[y]], 0.05), 2),
+      high = round(quantile(.data[[y]], 0.95), 2)
+    ) |>
+    ungroup()
+}
+
+aprs <- make_epr_summaries(df, "mu_prop_take")
+area <- make_epr_summaries(df, "property_area_km2")
+effort <- make_epr_summaries(df, "mu_total_effort_per")
+
+epr_kable <- function(df) {
+  df |>
+    mutate(value = paste0(med, " (", low, "-", high, ")")) |>
+    select(-low, -high, -med) |>
+    rename(`EPR` = epr_cat, `Median (90% CI)` = value) |>
+    knitr::kable()
+}
+
+
+```
+
+### The expected proportion of the population remaining (EPR)
+
+The expected proportion of the population remaining (EPR) is a metric that combines the actual proportion removed (APR) with the population growth rate to estimate the net effect of removals on population size. If EPR equals 1, the population is expected to be eradicated, at zero the population is expected to remain unchanged, and if less than zero, the population is expected to grow. This metric allows for direct comparison of removal effectiveness across properties and methods. 
+
+As expected, to slash a population (i.e. reduce it by more than half) the APR was greater than to shrink a population (i.e. reduce it by less than half), and the smallest APRs actually resulted in a growing population (@fig-epr A). While this was apparent for all methods, the APR needed to slash a population varied. For example, to slash a popultion with helicopters the APR needed was 5.2 times greater than what was needed to slash the population by traps. Likewise, to shrink a population the helicopters need to take 5.5 times more than what was needed by traps. The APRs resulting in a growing population were small and consistent across methods (Supplement table S##).
+
+There was a gradient in property area where take that was expected to slash a population mostly occurred on smaller properties compared to that of shrinking and growing. This gradient was apparent for all methods (@fig-epr B). For example, the median property size (km^2) where growth was expected to occurr compared to where slashing was expected to occur was on properterites that were 3.4, 1.5, 3.7, 5.2 and 2.9 times larger for traps, snares, sharpshooting, helicopters, and fixed wing aircraft, respectively (Supplement table S##). 
+
+The effort required to achieve a significant reduction in the population was remarkably similar to the effort observed in cases where populations were expected to grow. For example, the largest difference in effort per unit deployed was for sharpshooting, where 5 (90% CI 1.9-20.8) shooters per hour resulted in slashing and 7.83 (90% CI 2.25-22.5) shooters per hour resulted in population growth (Supplementary table s##). 
+
+### APR
+```{r}
+epr_kable(aprs)
+```
+
+# Area
+```{r}
+epr_kable(area)
+```
+
+# Effort
+```{r}
+epr_kable(effort)
 ```
 
 
