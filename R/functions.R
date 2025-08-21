@@ -472,7 +472,7 @@ plot_bootstrap <- function(df) {
 		theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
 }
 
-plot_effort <- function(mu_lambda, df_actual, model_data_last) {
+make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
 	df <- mu_lambda |>
 		rename(lambda = mu) |>
 		select(-n)
@@ -494,9 +494,11 @@ plot_effort <- function(mu_lambda, df_actual, model_data_last) {
 
 	df_plot <- df_epr |>
 		left_join(dat, by = "propertyID")
+}
 
+plot_effort <- function(epr_data) {
 	my_box <- function(x) {
-		df_plot |>
+		epr_data |>
 			ggplot() +
 			aes(x = .data[[x]], y = method, color = epr_cat) +
 			labs(color = "Population\ntrajectory") +
@@ -553,7 +555,7 @@ plot_effort <- function(mu_lambda, df_actual, model_data_last) {
 		geom_line(
 			data = d1,
 			aes(x = lambda, y = apr, linetype = epr_cat),
-			size = 1
+			linewidth = 1
 		) +
 		scale_fill_gradientn(colors = c("#b2182b", "#f7f7f7", "#2166ac")) +
 		scale_linetype_manual(
