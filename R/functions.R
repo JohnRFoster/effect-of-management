@@ -80,6 +80,7 @@ data_prep <- function(df, df_density, cutoff_date) {
 		) |>
 		select(
 			propertyID,
+			farm_bill,
 			end_dates,
 			`year`,
 			st_name,
@@ -197,7 +198,7 @@ plot_mean_lambdas <- function(df) {
 
 	y_fac <- y_order$st_name
 
-	df |>
+	g <- df |>
 		left_join(y_order) |>
 		mutate(st_name = factor(st_name, levels = y_fac)) |>
 		ggplot() +
@@ -217,7 +218,25 @@ plot_mean_lambdas <- function(df) {
 			y = "Population growth rate / 28-days",
 			x = ""
 		) +
-		theme_bw()
+		theme_bw() +
+		theme(
+			axis.text = element_text(size = 14),
+			axis.title = element_text(size = 16),
+			legend.title = element_text(size = 16),
+			strip.text = element_text(size = 14),
+			legend.text = element_text(size = 14)
+		)
+
+	ggsave(
+		filename = "plots/lambda_hat_by_state.jpeg",
+		plot = g,
+		width = 10,
+		height = 6,
+		units = "in",
+		dpi = 300
+	)
+
+	g
 }
 
 prop_take_by_method <- function(df, df_density) {
@@ -305,17 +324,35 @@ plot_percent_take <- function(df_actual) {
 			scale_y_discrete(drop = FALSE) +
 			scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
 			facet_wrap(~st_name) +
-			theme_bw()
+			theme_bw() +
+			theme(
+				axis.text = element_text(size = 14),
+				axis.title = element_text(size = 16),
+				legend.title = element_text(size = 16),
+				strip.text = element_text(size = 14),
+				legend.text = element_text(size = 14)
+			)
 	}
 
-	plot_states(tmp)
+	g <- plot_states(tmp)
+
+	ggsave(
+		filename = "plots/prop_take.jpeg",
+		plot = g,
+		width = 10,
+		height = 6,
+		units = "in",
+		dpi = 300
+	)
+
+	g
 }
 
 run_bootstrap <- function(
 	df_params,
 	df_data,
 	n_ens,
-	sim_days = 365,
+	sim_days = 365 * 5,
 	n_sim = 10000
 ) {
 	# get random sample of parameters
@@ -416,9 +453,13 @@ run_bootstrap <- function(
 				area = area,
 				K = K,
 				D1 = n_1 / area,
-				density_cat = if_else(D1 < 2, "Low", "Medium"),
-				density_cat = if_else(D1 > 6, "High", density_cat),
-				density_cat = factor(density_cat, levels = c("Low", "Medium", "High"))
+				density_cat = if_else(D1 < 2, "Low", "Very high"),
+				density_cat = if_else(D1 >= 2 & D1 < 4, "Medium", density_cat),
+				density_cat = if_else(D1 >= 4 & D1 < 6, "High", density_cat),
+				density_cat = factor(
+					density_cat,
+					levels = c("Low", "Medium", "High", "Very high")
+				)
 			)
 		all_out <- bind_rows(all_out, out)
 
@@ -451,10 +492,10 @@ plot_bootstrap <- function(df) {
 	keep <- seq(28, 28 * 30, by = 28 * 4)
 	weeks_f <- sort(keep / 7)
 
-	df |>
+	g <- df |>
 		filter(
 			delta_time %in% keep,
-			!st_name %in% c("NORTH CAROLINA", "VIRGINIA", "WEST VIRGINIA")
+			!st_name %in% c("North Carolina", "Virginia", "West Virginia")
 		) |>
 		mutate(weeks = delta_time / 7, weeks = factor(weeks, levels = weeks_f)) |>
 		ggplot() +
@@ -469,7 +510,26 @@ plot_bootstrap <- function(df) {
 		labs(x = "Weeks", y = "Change in density", fill = "Management") +
 		scale_fill_manual(values = c("With" = "#998ec3", "Without" = "#f1a340")) +
 		theme_bw() +
-		theme(axis.text.x = element_text(angle = 90, vjust = 0.5))
+		theme(
+			axis.text.x = element_text(angle = 90, vjust = 0.5),
+			legend.position = "bottom",
+			axis.text = element_text(size = 14),
+			axis.title = element_text(size = 16),
+			legend.title = element_text(size = 16),
+			strip.text = element_text(size = 14),
+			legend.text = element_text(size = 14)
+		)
+
+	ggsave(
+		filename = "plots/management_trajectory.jpeg",
+		plot = g,
+		width = 10,
+		height = 6,
+		units = "in",
+		dpi = 300
+	)
+
+	g
 }
 
 make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
@@ -511,17 +571,25 @@ plot_effort <- function(epr_data) {
 				)
 			) +
 			theme_bw() +
-			theme(axis.title.y = element_blank())
+			theme(
+				axis.title.y = element_blank(),
+				axis.text = element_text(size = 10),
+				axis.title = element_text(size = 14),
+				legend.title = element_text(size = 12),
+				strip.text = element_text(size = 12),
+				legend.text = element_text(size = 10)
+			)
 	}
 
 	g1 <- my_box("mu_prop_take") +
-		labs(x = "Average APR", title = "APR")
+		labs(x = "Average APR") +
+		scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2))
 	g2 <- my_box("property_area_km2") +
 		scale_x_log10() +
-		labs(x = expression("Property area " ~ (km^2)), title = "Area")
+		labs(x = expression("Property area " ~ (km^2)))
 	g3 <- my_box("mu_total_effort_per") +
 		scale_x_log10() +
-		labs(x = "Average total effort per unit", title = "Effort")
+		labs(x = "Average total effort per unit")
 
 	gg <- ggarrange(
 		g1,
@@ -564,16 +632,33 @@ plot_effort <- function(epr_data) {
 		labs(
 			y = "APR",
 			x = "Populuation growth rate per 28-days",
-			fill = "Effective proportion\nof individuals removed",
-			linetype = "Management goal"
+			fill = "EPT",
+			linetype = element_blank()
 		) +
-		theme_bw()
+		theme_bw() +
+		theme(
+			axis.text = element_text(size = 12),
+			axis.title = element_text(size = 14),
+			legend.title = element_text(size = 12),
+			strip.text = element_text(size = 12),
+			legend.text = element_text(size = 10)
+		)
 
-	ggarrange(
+	g <- ggarrange(
 		gg,
 		g4,
 		nrow = 2,
 		labels = c("", "D"),
 		heights = c(2, 1)
 	)
+
+	ggsave(
+		filename = "plots/epr_effort_compAdditive.jpeg",
+		plot = g,
+		width = 10,
+		height = 8,
+		units = "in",
+		dpi = 300
+	)
+	g
 }
