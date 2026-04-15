@@ -51,6 +51,12 @@ list(
   ),
 
   tar_target(
+    name = parameter_first_file,
+    command = file.path(data_dir, first_iter, "posteriorSamples.rds"),
+    format = "file"
+  ),
+
+  tar_target(
     name = parameter_last_file,
     command = file.path(data_dir, last_iter, "posteriorSamples.rds"),
     format = "file"
@@ -109,16 +115,20 @@ list(
   tar_target(
     name = plot_epr,
     command = plot_effort(epr_data)
-  )
+  ),
 
-  # tar_target(
-  #   name = write_figures_script,
-  #   command = "write_figures.R",
-  #   format = "file"
-  # ),
-  #
-  # tar_target(
-  #   name = write_figures,
-  #   command = source(write_figures_script, local = TRUE)
-  # )
+  tar_target(
+    name = post_all,
+    command = extract_parameters(parameter_first_file, parameter_last_file)
+  ),
+
+  tar_target(
+    name = post_table,
+    command = create_parameter_table(post_all)
+  ),
+
+  tar_target(
+    name = post_plot_compare,
+    command = plot_params_compare(post_all)
+  )
 )

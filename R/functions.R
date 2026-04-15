@@ -1,3 +1,8 @@
+library(readr)
+library(dplyr)
+library(tidyr)
+
+
 # read rds files
 get_rds <- function(file) {
 	read_rds(file)
@@ -8,7 +13,7 @@ get_rds <- function(file) {
 fix_method_names <- function(df) {
 	df |>
 		mutate(
-			method = if_else(method == "FIREARMS", "Sharpshooting", method),
+			method = if_else(method == "FIREARMS", "Ground-shooting", method),
 			method = if_else(method == "FIXED WING", "Fixed wing", method),
 			method = if_else(method == "HELICOPTER", "Helicopter", method),
 			method = if_else(method == "SNARE", "Snare", method),
@@ -177,7 +182,7 @@ calculate_realized_r <- function(df) {
 	calculate_lambda(data_for_growth)
 }
 
-# the mean population growth rate for each property ----
+# the mean population growth rate for each property
 # separated by state
 mean_growth <- function(df) {
 	df |>
@@ -274,7 +279,7 @@ prop_take_by_method <- function(df, df_density) {
 		mutate(
 			prop_take = total_take / abundance_estimate,
 			density = `0.5`,
-			method = stringr::str_replace(method, "Firearms", "Sharpshooting")
+			method = stringr::str_replace(method, "Firearms", "Ground-shooting")
 		) |>
 		group_by(method, propertyID, st_name) |>
 		summarise(
@@ -303,7 +308,7 @@ plot_percent_take <- function(df_actual) {
 					levels = c(
 						"Fixed wing",
 						"Helicopter",
-						"Sharpshooting",
+						"Ground-shooting",
 						"Snare",
 						"Trap"
 					)
@@ -399,6 +404,7 @@ run_bootstrap <- function(
 				propertyID,
 				property_area_km2,
 				abundance_estimate,
+				methods_used,
 				end_dates,
 				year,
 				st_name
@@ -448,14 +454,15 @@ run_bootstrap <- function(
 		out <- left_join(tmp_compare, timestep_df, by = c("end_dates", "year")) |>
 			filter(delta_time > 0) |>
 			mutate(
+				simID = counter,
 				density_estimate = abundance_estimate / area,
 				densityNoMgmt_estimate = abundanceNoMgmt / area,
 				area = area,
 				K = K,
 				D1 = n_1 / area,
-				density_cat = if_else(D1 < 2, "Low", "Very high"),
-				density_cat = if_else(D1 >= 2 & D1 < 4, "Medium", density_cat),
-				density_cat = if_else(D1 >= 4 & D1 < 6, "High", density_cat),
+				density_cat = if_else(D1 < 1, "Low", "Very high"),
+				density_cat = if_else(D1 >= 1 & D1 < 3, "Medium", density_cat),
+				density_cat = if_else(D1 >= 3 & D1 < 5, "High", density_cat),
 				density_cat = factor(
 					density_cat,
 					levels = c("Low", "Medium", "High", "Very high")
@@ -468,8 +475,22 @@ run_bootstrap <- function(
 		if (counter %% 1000 == 0) message(counter / n_sim * 100, "%")
 	}
 
+	cols_needed <- c(
+		"simID",
+		"delta_time",
+		"st_name",
+		"D1",
+		"density_cat",
+		"propertyID",
+		"property_area_km2",
+		"methods_used"
+	)
+
 	with_mgmt <- all_out |>
-		select(delta_time, st_name, density_estimate, D1, density_cat) |>
+		select(
+			all_of(cols_needed),
+			density_estimate
+		) |>
 		mutate(
 			mgmt = "With",
 			delta_density = density_estimate - D1,
@@ -477,7 +498,10 @@ run_bootstrap <- function(
 		)
 
 	without_mgmt <- all_out |>
-		select(delta_time, st_name, densityNoMgmt_estimate, D1, density_cat) |>
+		select(
+			all_of(cols_needed),
+			densityNoMgmt_estimate
+		) |>
 		rename(density_estimate = densityNoMgmt_estimate) |>
 		mutate(
 			mgmt = "Without",
@@ -489,47 +513,62 @@ run_bootstrap <- function(
 }
 
 plot_bootstrap <- function(df) {
-	keep <- seq(28, 28 * 30, by = 28 * 4)
-	weeks_f <- sort(keep / 7)
+	keep <- c(364, 728, 1092, 1456, 1820)
+	years_f <- sort(keep / 364)
 
-	g <- df |>
-		filter(
-			delta_time %in% keep,
-			!st_name %in% c("North Carolina", "Virginia", "West Virginia")
-		) |>
-		mutate(weeks = delta_time / 7, weeks = factor(weeks, levels = weeks_f)) |>
-		ggplot() +
-		aes(
-			x = weeks,
-			y = delta_density,
-			fill = mgmt
-		) +
-		geom_boxplot(outliers = FALSE) +
-		geom_hline(yintercept = 0, linetype = "dashed") +
-		facet_grid(density_cat ~ st_name, scales = "free_y") +
-		labs(x = "Weeks", y = "Change in density", fill = "Management") +
-		scale_fill_manual(values = c("With" = "#998ec3", "Without" = "#f1a340")) +
-		theme_bw() +
-		theme(
-			axis.text.x = element_text(angle = 90, vjust = 0.5),
-			legend.position = "bottom",
-			axis.text = element_text(size = 14),
-			axis.title = element_text(size = 16),
-			legend.title = element_text(size = 16),
-			strip.text = element_text(size = 14),
-			legend.text = element_text(size = 14)
-		)
+	my_plot <- function(df) {
+		df |>
+			filter(
+				delta_time %in% keep,
+				!st_name %in% c("North Carolina", "Virginia", "West Virginia")
+			) |>
+			mutate(
+				weeks = delta_time / 364,
+				weeks = factor(weeks, levels = years_f)
+			) |>
+			ggplot() +
+			aes(
+				x = weeks,
+				y = delta_density,
+				fill = mgmt
+			) +
+			geom_boxplot(outliers = FALSE) +
+			geom_hline(yintercept = 0, linetype = "dashed") +
+			labs(x = "Years", y = "Change in density", fill = "Management") +
+			scale_fill_manual(values = c("With" = "#998ec3", "Without" = "#f1a340")) +
+			theme_bw() +
+			theme(
+				legend.position = "right",
+				axis.text = element_text(size = 14),
+				axis.title = element_text(size = 16),
+				legend.title = element_text(size = 16),
+				strip.text = element_text(size = 14),
+				legend.text = element_text(size = 14)
+			)
+	}
+
+	g1 <- my_plot(df) + facet_grid(~density_cat)
+	g2 <- my_plot(df) + facet_grid(density_cat ~ st_name)
 
 	ggsave(
 		filename = "plots/management_trajectory.jpeg",
-		plot = g,
+		plot = g1,
 		width = 10,
 		height = 6,
 		units = "in",
 		dpi = 300
 	)
 
-	g
+	ggsave(
+		filename = "plots/management_trajectory_by_state.jpeg",
+		plot = g2,
+		width = 10,
+		height = 6,
+		units = "in",
+		dpi = 300
+	)
+
+	list(density = g1, state = g2)
 }
 
 make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
@@ -539,13 +578,18 @@ make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
 
 	df_epr <- df_actual |>
 		left_join(df) |>
-		filter(!is.na(lambda)) |>
+		filter(!is.na(lambda), lambda > 0) |>
 		mutate(
-			EPR = 1 + (lambda * (mu_prop_take - 1)),
-			epr_cat = if_else(EPR < 0, "Grow", "Shrink"),
-			epr_cat = if_else(EPR >= 0.5, "Slash", epr_cat)
-			# epr_cat = if_else(EPR <= 0, "Grow", "Shrink")
-		)
+			EPR = lambda * (1 - mu_prop_take) - 1,
+			epr_cat = if_else(EPR > 0, "Grow", "Shrink"),
+			epr_cat = if_else(EPR <= -0.5, "Slash", epr_cat),
+			epr_cat = if_else(EPR == -1, "Eradicate", epr_cat),
+			epr_cat = factor(
+				epr_cat,
+				levels = c("Grow", "Shrink", "Slash", "Eradicate")
+			)
+		) |>
+		filter(epr_cat != "Eradicate")
 
 	dat <- model_data_last |>
 		select(propertyID, property_area_km2) |>
@@ -553,22 +597,26 @@ make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
 		distinct()
 
 	df_plot <- df_epr |>
-		left_join(dat, by = "propertyID")
+		left_join(dat, by = "propertyID") |>
+		mutate(effort_per_unit_per_area = mu_total_effort_per / property_area_km2)
 }
 
 plot_effort <- function(epr_data) {
+	ept_cols <- c(
+		"Grow" = "#d73027",
+		"Shrink" = "#4393c3",
+		"Slash" = "#2166ac",
+		"Eradicate" = "#053061"
+	)
+
 	my_box <- function(x) {
 		epr_data |>
 			ggplot() +
 			aes(x = .data[[x]], y = method, color = epr_cat) +
-			labs(color = "Population\ntrajectory") +
+			labs(color = "Population trajectory") +
 			geom_boxplot(outliers = FALSE) +
 			scale_color_manual(
-				values = c(
-					"Grow" = "#b2182b",
-					"Shrink" = "#92c5de",
-					"Slash" = "#2166ac"
-				)
+				values = ept_cols
 			) +
 			theme_bw() +
 			theme(
@@ -587,9 +635,10 @@ plot_effort <- function(epr_data) {
 	g2 <- my_box("property_area_km2") +
 		scale_x_log10() +
 		labs(x = expression("Property area " ~ (km^2)))
-	g3 <- my_box("mu_total_effort_per") +
+	g3 <- my_box("effort_per_unit_per_area") +
 		scale_x_log10() +
-		labs(x = "Average total effort per unit")
+		# fmt: skip
+		labs(x = expression("Avg. TEPU/"~km^2))
 
 	gg <- ggarrange(
 		g1,
@@ -603,35 +652,51 @@ plot_effort <- function(epr_data) {
 	)
 
 	d1 <- expand_grid(
-		epr = c(0, 0.5),
+		epr = c(-1, -0.5, 0),
 		lambda = seq(0, 2, by = 0.01)
 	) |>
-		mutate(apr = (epr + lambda - 1) / lambda) |>
+		mutate(apr = 1 - ((1 + epr) / lambda)) |>
 		filter(apr >= 0, apr <= 1) |>
 		mutate(
-			epr_cat = if_else(epr == 0, "Maintenance", "50% reduction")
+			epr_cat = if_else(epr == 0, "Maintenance", "50% reduction"),
+			epr_cat = if_else(epr == -1, "Eradication", epr_cat),
+			epr_cat = factor(
+				epr_cat,
+				levels = c("Maintenance", "50% reduction", "Eradication")
+			)
 		)
 
 	g4 <- expand_grid(
 		apr = seq(0, 1, by = 0.05),
 		lambda = seq(0, 2, by = 0.05)
 	) |>
-		mutate(epr = 1 + (lambda * (apr - 1))) |>
+		mutate(
+			epr = lambda * (1 - apr) - 1
+		) |>
 		ggplot() +
 		aes(x = lambda, y = apr, fill = epr) +
 		geom_tile() +
 		geom_line(
 			data = d1,
 			aes(x = lambda, y = apr, linetype = epr_cat),
-			linewidth = 1
+			linewidth = 1,
+			color = "#f33"
 		) +
-		scale_fill_gradientn(colors = c("#b2182b", "#f7f7f7", "#2166ac")) +
+		scale_fill_gradientn(
+			breaks = c(1, 0.5, 0, -0.5, -1),
+			labels = c("Double", "", "Maintain", "", "Eradicate"),
+			colors = c("#053061", "#2166ac", "#f7f7f7", "#f4a582", "#d73027")
+		) +
 		scale_linetype_manual(
-			values = c("Maintenance" = "dashed", "50% reduction" = "dotted")
+			values = c(
+				"Maintenance" = "dotted",
+				"50% reduction" = "dashed",
+				"Eradication" = "solid"
+			)
 		) +
 		labs(
 			y = "APR",
-			x = "Populuation growth rate per 28-days",
+			x = "Populuation growth rate",
 			fill = "EPT",
 			linetype = element_blank()
 		) +
@@ -661,4 +726,216 @@ plot_effort <- function(epr_data) {
 		dpi = 300
 	)
 	g
+}
+
+extract_parameters <- function(post_1, post_2) {
+	post_1 <- read_rds(post_1) |>
+		mutate(round = "First") |>
+		pivot_longer(
+			cols = -round,
+			names_to = "parameter",
+			values_to = "value"
+		)
+
+	post_11 <- read_rds(post_2) |>
+		mutate(round = "Last") |>
+		pivot_longer(
+			cols = -round,
+			names_to = "parameter",
+			values_to = "value"
+		)
+
+	post_all <- bind_rows(post_1, post_11) |>
+		mutate(
+			method_idx = as.numeric(stringr::str_extract(parameter, "(?<=\\[)\\d")),
+			method_idx = if_else(
+				grepl("log_gamma", parameter) | grepl("p_mu", parameter),
+				method_idx + 3,
+				method_idx
+			),
+			land_idx = as.numeric(stringr::str_extract(parameter, "(?<=\\,\\s)\\d"))
+		)
+
+	method_vector <- c(
+		"Ground-shooting",
+		"Fixed wing",
+		"Helicopter",
+		"Snare",
+		"Trap"
+	)
+
+	method_lookup <- tibble(
+		method_idx = 1:5,
+		method = method_vector
+	)
+
+	land_lookup <- tibble(
+		land_idx = 1:3,
+		land = c("Road density", "Ruggedness", "Canopy cover")
+	)
+
+	param_names <- function(df) {
+		df |>
+			mutate(
+				name = case_when(
+					grepl("gamma", parameter) ~ "Gamma",
+					grepl("rho", parameter) ~ "Rho",
+					grepl("p_mu", parameter) ~ "Omega",
+					grepl("beta", parameter) ~ "Beta",
+					grepl("phi_mu", parameter) ~ "Phi",
+					grepl("psi_phi", parameter) ~ "Psi",
+					grepl("log_nu", parameter) ~ "Nu"
+				)
+			)
+	}
+
+	post_all |>
+		left_join(method_lookup, by = "method_idx") |>
+		left_join(land_lookup, by = "land_idx") |>
+		mutate(
+			land = if_else(grepl("beta1", parameter), "Intercept", land),
+			value = if_else(grepl("log", parameter), exp(value), value),
+			value = if_else(grepl("p_mu", parameter), nimble::ilogit(value), value)
+		) |>
+		param_names() |>
+		group_by(name, round, parameter, method, land) |>
+		summarise(
+			med = median(value),
+			low = quantile(value, 0.025),
+			high = quantile(value, 0.975),
+			.groups = "drop"
+		) |>
+		ungroup()
+}
+
+create_parameter_table <- function(post_all) {
+	post_all |>
+		mutate(
+			est = paste0(
+				round(med, 2),
+				" (",
+				round(low, 2),
+				", ",
+				round(high, 2),
+				")"
+			)
+		) |>
+		select(parameter, round, method, land, name, est) |>
+		pivot_wider(
+			names_from = round,
+			values_from = est
+		)
+}
+
+plot_params_compare <- function(post_all) {
+	round_cols <- c(
+		"First" = "#1b9e77",
+		"Last" = "#7570b3"
+	)
+
+	plot_lines <- function(df, m) {
+		df |>
+			filter(method == m) |>
+			ggplot() +
+			aes(x = round, ymin = low, ymax = high, y = med) +
+			geom_pointrange() +
+			facet_wrap(~name, scales = "free") +
+			labs(
+				x = "Round",
+				y = "Value",
+				title = m
+			) +
+			scale_color_manual(values = round_cols) +
+			theme_bw() +
+			theme(
+				axis.text = element_text(size = 14),
+				axis.title = element_text(size = 16),
+				legend.title = element_text(size = 16),
+				title = element_text(size = 12),
+				legend.text = element_text(size = 14),
+				strip.text = element_text(size = 12)
+			)
+	}
+
+	g1 <- post_all |> filter(is.na(land)) |> plot_lines("Ground-shooting")
+	g2 <- post_all |> filter(is.na(land)) |> plot_lines("Fixed wing")
+	g3 <- post_all |> filter(is.na(land)) |> plot_lines("Helicopter")
+
+	ggarrange(
+		g1,
+		g2,
+		g3,
+		ncol = 3,
+		nrow = 1,
+		legend = "bottom",
+		labels = "AUTO"
+	)
+
+	ggsave(
+		filename = "plots/posterior_comparison_active_methods.jpeg",
+		width = 7,
+		height = 5,
+		units = "in",
+		dpi = 300
+	)
+
+	g1 <- post_all |> filter(is.na(land)) |> plot_lines("Trap")
+	g2 <- post_all |> filter(is.na(land)) |> plot_lines("Snare")
+
+	ggarrange(
+		g1,
+		g2,
+		nrow = 2,
+		legend = "bottom",
+		labels = "AUTO"
+	)
+
+	ggsave(
+		filename = "plots/posterior_comparison_passive_methods.jpeg",
+		width = 7,
+		height = 5,
+		units = "in",
+		dpi = 300
+	)
+
+	g1 <- post_all |>
+		filter(!is.na(land)) |>
+		plot_lines("Ground-shooting") +
+		facet_wrap(~land, scales = "free")
+	g2 <- post_all |>
+		filter(!is.na(land)) |>
+		plot_lines("Snare") +
+		facet_wrap(~land, scales = "free")
+	g3 <- post_all |>
+		filter(!is.na(land)) |>
+		plot_lines("Helicopter") +
+		facet_wrap(~land, scales = "free")
+	g4 <- post_all |>
+		filter(!is.na(land)) |>
+		plot_lines("Fixed wing") +
+		facet_wrap(~land, scales = "free")
+	g5 <- post_all |>
+		filter(!is.na(land)) |>
+		plot_lines("Trap") +
+		facet_wrap(~land, scales = "free")
+
+	ggarrange(
+		g1,
+		g2,
+		g3,
+		g4,
+		g5,
+		ncol = 3,
+		nrow = 2,
+		legend = "bottom",
+		labels = "AUTO"
+	)
+
+	ggsave(
+		filename = "plots/posterior_comparison_betas.jpeg",
+		width = 12,
+		height = 10,
+		units = "in",
+		dpi = 300
+	)
 }
