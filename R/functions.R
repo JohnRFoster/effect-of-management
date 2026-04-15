@@ -65,7 +65,7 @@ make_methods_used <- function(df) {
 }
 
 # prepare data for analysis and plotting
-data_prep <- function(df, df_density, cutoff_date) {
+data_prep <- function(df, df_density) {
 	tmp <- df |>
 		fix_method_names() |>
 		make_model_data()
@@ -76,7 +76,6 @@ data_prep <- function(df, df_density, cutoff_date) {
 		left_join(df_density) |>
 		left_join(df_methods) |>
 		mutate(year = year(end_dates)) |>
-		filter(end_dates <= cutoff_date) |>
 		mutate(abundance_estimate = round(`0.5` * property_area_km2)) |>
 		rename(
 			density_estimate = `0.5`,
@@ -938,4 +937,69 @@ plot_params_compare <- function(post_all) {
 		units = "in",
 		dpi = 300
 	)
+}
+
+density_summaries <- function(data_density, data_model) {
+	properties <- data_model |>
+		select(
+			propertyID,
+			agrp_prp_id,
+			property_area_km2,
+			end_dates,
+			STATE_NAME,
+			cnty_name,
+			primary_period,
+			property
+		) |>
+		distinct() |>
+		mutate(year = year(end_dates))
+
+	data <- left_join(data_density, properties) |>
+		rename(density = `0.5`) |>
+		mutate(abundance = round(density * property_area_km2))
+
+	get_ci <- function(df) {
+		df |>
+			summarise(
+				n = n(),
+				med_dens = round(median(density), 2),
+				low_dens = round(quantile(density, 0.05), 2),
+				high_dens = round(quantile(density, 0.95), 2),
+				q1_dens = round(quantile(density, 0.25), 2),
+				q3_dens = round(quantile(density, 0.75), 2),
+				total_abun = sum(abundance)
+			) |>
+			ungroup()
+	}
+
+	# all
+	overall <- data |>
+		get_ci()
+
+	# by year
+	dens_year <- data |>
+		group_by(year) |>
+		get_ci()
+
+	list(overall = overall, by_year = dens_year)
+}
+
+plot_density_year <- function(dens_ls) {
+	dens_ls$by_year |>
+		ggplot(aes(x = year, y = med_dens, ymin = low_dens, ymax = high_dens)) +
+		geom_linerange(aes(ymin = q1_dens, ymax = q3_dens), linewidth = 2) +
+		geom_linerange() +
+		geom_point(size = 5) +
+		geom_point(size = 3, color = "white") +
+		labs(
+			x = "Year",
+			y = "Median Density (pigs/km2)",
+			title = "Median Density of Pigs by Year"
+		) +
+		theme_bw() +
+		theme(
+			axis.text = element_text(size = 14),
+			axis.title = element_text(size = 18),
+			title = element_text(size = 18)
+		)
 }

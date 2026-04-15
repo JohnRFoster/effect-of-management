@@ -69,7 +69,7 @@ list(
 
   tar_target(
     name = data_mis,
-    command = data_prep(model_data_last, density_last, cutoff_date)
+    command = data_prep(model_data_last, density_last)
   ),
 
   tar_target(
@@ -130,5 +130,10 @@ list(
   tar_target(
     name = post_plot_compare,
     command = plot_params_compare(post_all)
+  ),
+
+  tar_target(
+    name = density_cis,
+    command = density_summaries(density_last, model_data_last)
   )
 )

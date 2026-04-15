@@ -13,8 +13,10 @@ execute:
 library(targets)
 library(dplyr)
 library(tidyr)
+library(readr)
 library(ggplot2)
 library(ggpubr)
+library(lubridate)
 ```
 
 This document will run the analysis for the manuscript
@@ -27,105 +29,271 @@ First, make sure everything is up to date:
 tar_make()
 ```
 
+### Population estimates
+
+```{r}
+density_cis <- tar_read("density_cis")
+
+overall <- density_cis$overall
+overall_med <- overall$med_dens
+overall_low <- overall$low_dens
+overall_high <- overall$high_dens
+overall_text <- paste0(overall_med, " (", overall_low, "-", overall_high, ")")
+
+by_year <- density_cis$by_year |>
+  select(year, med_dens, low_dens, high_dens) |>
+  mutate(text = paste0(med_dens, " (", low_dens, "-", high_dens, ")"))
+
+text_2014 <- by_year |>
+  filter(year == 2014) |>
+  pull(text)
+
+text_2024 <- by_year |>
+  filter(year == 2024) |>
+  pull(text)
+```
+
+Here, and throughout the manuscript, we describe distributions by their median and central 90% interval (i.e. CI; the 5% and 95% quantiles). Across the 12 states and 11 years where USDA-APHIS-WS removals occurred (n=12,432 individual primary periods from 2014-01-28 to 2024-06-30 across 995 properties), the distribution of median posterior density estimates had a median of `r overall_text` wild pigs/km2. There was a consistent downward trend in density through time. In 2014 the median density was `r text_2014` wild pigs/km2, and by 2024 median density was `r text_2024` wild pigs/km2 (Appendix 1 Figure S5). Note that 2024 was an incomplete year of sampling. Furthermore, these are not national scale density estimates or trends, but rather a summary of estimated densities at properties where USDA-APHIS-WS conducted removals over this time period.
+
+### Proportion of the population removed varies by method
+
+```{r}
+#| label: fig-removals
+#| fig-cap: "Summary of the average proportion of the population removed by each method at each property. Boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR."
+tar_read("plot_prop_take")
+
+
+df_actual <- tar_read("actual_percent_take")
+
+by_state <- function(df) {
+  df |>
+    group_by(method, st_name) |>
+    summarise(
+      med = round(median(mu_prop_take), 2),
+      low = round(quantile(mu_prop_take, 0.05), 2),
+      high = round(quantile(mu_prop_take, 0.95), 2),
+      n = n()
+    ) |>
+    ungroup() |>
+    filter(n > 1) |>
+    mutate(text = paste0(med, " (", low, "-", high, ")"))
+}
+
+a_by_state <- by_state(df_actual)
+
+max_trap <- a_by_state |>
+  filter(method == "Trap") |>
+  filter(med == max(med))
+trap_state <- max_trap$st_name
+trap_text <- max_trap$text
+
+max_snare <- a_by_state |>
+  filter(method == "Snare") |>
+  filter(med == max(med))
+snare_state <- max_snare$st_name
+snare_text <- max_snare$text
+
+min_ground <- a_by_state |>
+  filter(method == "Ground-shooting") |>
+  filter(med == min(med))
+min_ground_state <- min_ground$st_name
+min_ground_text <- min_ground$text
+
+max_ground <- a_by_state |>
+  filter(method == "Ground-shooting") |>
+  filter(med == max(med))
+max_ground_state <- max_ground$st_name
+max_ground_text <- max_ground$text
+
+min_fw <- a_by_state |>
+  filter(method == "Fixed wing") |>
+  filter(med == min(med))
+min_fw_state <- min_fw$st_name
+min_fw_text <- min_fw$text
+
+max_fw <- a_by_state |>
+  filter(method == "Fixed wing") |>
+  filter(med == max(med))
+max_fw_state <- max_fw$st_name
+max_fw_text <- max_fw$text
+
+min_heli <- a_by_state |>
+  filter(method == "Helicopter") |>
+  filter(med == min(med))
+min_heli_state <- min_heli$st_name
+min_heli_text <- min_heli$text
+
+max_heli <- a_by_state |>
+  filter(method == "Helicopter") |>
+  filter(med == max(med))
+max_heli_state <- max_heli$st_name
+max_heli_text <- max_heli$text
+```
+
+
+Removal methods were not used at all properties or even in all states. Additionally, resource constraints and environmental conditions can dictate which methods are used and when. Therefore, understanding the effectiveness of context-specific management is critical for evaluating future removal efforts.
+
+There were nine states in which the median proportion of the population removed in a 4-week period by traps was zero (Figure 1), and the maximum came from `r max_trap_state` with a median of `r max_trap_text`. For snares, there were three states where the median proportion of the population removed was zero, and the maximum came from `r max_snare_state` with a median of `r max_snare_text`. For ground-shooting, the range in the median proportion of the population removed was between `min_ground_text` and `max_ground_text` for `min_ground_state` and `max_ground_state`, respectively. There were two states that used fixed wing aircraft, which removed a proportion between `r min_fw_text` and `r max_fw_text` for `r min_fw_state` and `r max_fw_state`, respectively. Lastly, for helicopters, the range in the median proportion of the population removed in a 4-week period was between `r min_heli_text` and `r max_heli_text` for `r min_heli_state` and `r max_heli_state`, respectively.
+
+```{r}
+#| label: tbl-apr
+#| tbl-cap: "Summaries (median and 90% central interval) of the property-level average of the actual proportion of the population removed (APR), the area (km2) of the property where methods were deployed, and the property-level average of total effort per unit deployed for each method. Effort unit is the effort per unit deployed for each method. n is the number of properties that deployed a specific method."
+df_d <- tar_read("model_data_last") |>
+  select(propertyID, property_area_km2) |>
+  unique()
+
+tmp <- left_join(df_actual, df_d)
+
+my_summary <- function(y, r) {
+  tmp |>
+    group_by(method) |>
+    summarise(
+      med = round(median(.data[[y]]), r),
+      low = round(quantile(.data[[y]], 0.05), r),
+      high = round(quantile(.data[[y]], 0.95), r),
+    ) |>
+    mutate(v = paste0(med, " (", low, "-", high, ")")) |>
+    select(method, v) |>
+    rename(Method = method)
+}
+
+apr <- my_summary("mu_prop_take", 2) |> rename(APR = v)
+area <- my_summary("property_area_km2", 1) |> rename(Area = v)
+effort <- my_summary("mu_total_effort_per", 1) |> rename(Effort = v)
+n_props <- tmp |>
+  select(method, propertyID) |>
+  distinct() |>
+  count(method) |>
+  rename(
+    `n properties` = n,
+    Method = method
+  )
+
+# fmt: skip
+units <- tribble(
+  ~Method, ~`Effort unit`,
+  "Fixed wing", "Hobbs hours per aircraft",
+  "Helicopter", "Hobbs hours per aircraft",
+  "Sharpshooting", "Shooters per hour",
+  "Snare", "Snares per night",
+  "Trap", "Traps per night"
+)
+
+left_join(apr, area) |>
+  left_join(effort) |>
+  left_join(units) |>
+  left_join(n_props) |>
+  select(Method, APR, Area, Effort, `Effort unit`, `n properties`) |>
+  knitr::kable()
+```
+
 ### Population trajectory without management
 
 ```{r}
 #| label: fig-trajectory
-#| fig-cap: "Figure shows the change in median wild pig density relative to the initial median density at week 0 over a one-year period. The boxplots represent the median and interquartile range (IQR) of these changes, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed. The Without management scenario (orange) is the result of the boostrapping procedure (see methods section ##), and the With managment scenario (purple) compares median posterior density estimates. The rows represent the density category at week 0, where Low is less than 2 pigs/km2, Medium is between 2-6 pigs/km2, and High is greater than 6 pigs/km2. Note the different y-axis scale for each initial density category."
-
-tar_read("plot_management")
-
+#| fig-cap: "The change in median wild pig density relative to the initial median density at year 0 over a five-year period. The boxplots represent the median and interquartile range (IQR) of these changes, where the whiskers extend plus or minus 1.5 times the IQR with outliers removed. The Without management scenario (orange) is the result of the boostrapping procedure (see methods section ##), and the With managment scenario (purple) compares median posterior density estimates a the specified interval to the initial posterior density estimate at year zero. The facets represent the initial density category, where Low is less than 1 pig/km2, Medium is between 1-3 pigs/km2, High is between 3-5 pigs/km2, and Very high is greater than five pigs/km2."
+tar_read("plot_management")$density
 ```
 
 ```{r}
 #| label: bootstap analysis
-df <- tar_read("bootstrap_mgmt")
+keep <- c(364, 728, 1092, 1456, 1820)
+years_f <- sort(keep / 364)
 
-md <- max(df$delta_time)
+df <- tar_read("bootstrap_mgmt") |>
+  filter(delta_time %in% keep) |>
+  mutate(years = delta_time / 364)
 
-cat_medians <- df |>
+df_with <- df |>
   filter(
-    delta_time == md
+    mgmt == "With"
   ) |>
-  group_by(st_name, density_cat, mgmt) |>
+  rename(
+    density_with = density_estimate,
+    delta_with = delta_density
+  ) |>
+  select(-percent_change, -mgmt)
+
+df_without <- df |>
+  filter(
+    mgmt == "Without"
+  ) |>
+  rename(
+    density_without = density_estimate,
+    delta_without = delta_density
+  ) |>
+  select(-percent_change, -mgmt)
+
+cat_medians <- left_join(df_with, df_without) |>
+  mutate(density_prevented = density_without - density_with) |>
+  group_by(years, density_cat) |>
   summarise(
-    med = round(median(delta_density), 1),
-    low = round(quantile(delta_density, 0.05), 1),
-    high = round(quantile(delta_density, 0.95), 1)
+    med = round(median(density_prevented), 1),
+    low = round(quantile(density_prevented, 0.05), 1),
+    high = round(quantile(density_prevented, 0.95), 1),
+    n = n()
   ) |>
   ungroup() |>
   mutate(u = paste0("90% CI: ", low, "-", high))
 
-get_median_changes <- function(df, dc, mc, s) {
+get_u <- function(df, dc, y) {
   df |>
     filter(
       density_cat == dc,
-      mgmt == mc,
-      st_name == s
+      years == y
     ) |>
-    pull(med)
+    mutate(y = paste0(med, " (", u, ")")) |>
+    pull(y)
 }
 
-get_u <- function(df, dc, mc, s) {
-  df |>
-    filter(
-      density_cat == dc,
-      mgmt == mc,
-      st_name == s
-    ) |>
-    pull(u)
-}
+low_1 <- get_u(cat_medians, "Low", 1)
+low_5 <- get_u(cat_medians, "Low", 5)
+med_1 <- get_u(cat_medians, "Medium", 1)
+med_5 <- get_u(cat_medians, "Medium", 5)
+high_1 <- get_u(cat_medians, "High", 1)
+high_5 <- get_u(cat_medians, "High", 5)
+vhigh_1 <- get_u(cat_medians, "Very high", 1)
+vhigh_5 <- get_u(cat_medians, "Very high", 5)
 
-tx_m_high_wo <- cat_medians |> get_median_changes("High", "Without", "TEXAS")
-tx_m_high_w <- cat_medians |> get_median_changes("High", "With", "TEXAS")
-tx_u_high_wo <- cat_medians |> get_u("High", "Without", "TEXAS")
-tx_u_high_w <- cat_medians |> get_u("High", "With", "TEXAS")
-tx_diff <- tx_m_high_wo - tx_m_high_w
+delta_density <- df |>
+  group_by(density_cat, years, mgmt) |>
+  summarise(
+    med = round(median(delta_density), 1),
+    low = round(quantile(delta_density, 0.05), 1),
+    high = round(quantile(delta_density, 0.95), 1),
+    n = n()
+  ) |>
+  ungroup()
 
-delta_density <- cat_medians |>
-  select(st_name, density_cat, mgmt, med) |>
-  pivot_wider(names_from = mgmt, values_from = med) |>
-  mutate(delta = Without - With)
+q75 <- df |>
+  filter(density_cat == "Low", years == 5) |>
+  group_by(mgmt) |>
+  summarise(q = quantile(delta_density, 0.75))
 
-min_delta <- delta_density |>
-  group_by(density_cat) |>
-  filter(delta == min(delta))
-max_delta <- delta_density |>
-  group_by(density_cat) |>
-  filter(delta == max(delta))
-
-get_delta <- function(df, x, c) {
-  df |>
-    filter(density_cat == x) |>
-    pull(all_of(c))
-}
-
-min_low_delta_m <- get_delta(min_delta, "Low", "delta")
-min_med_delta_m <- get_delta(min_delta, "Medium", "delta")
-min_high_delta_m <- get_delta(min_delta, "High", "delta")
-min_low_delta_s <- get_delta(min_delta, "Low", "st_name")
-min_med_delta_s <- get_delta(min_delta, "Medium", "st_name")
-min_high_delta_s <- get_delta(min_delta, "High", "st_name")
-
-max_low_delta_m <- get_delta(max_delta, "Low", "delta")
-max_med_delta_m <- get_delta(max_delta, "Medium", "delta")[1]
-max_high_delta_m <- get_delta(max_delta, "High", "delta")[1]
-max_low_delta_s <- get_delta(max_delta, "Low", "st_name")
-max_med_delta_s <- get_delta(max_delta, "Medium", "st_name")[1]
-max_high_delta_s <- get_delta(max_delta, "High", "st_name")[1]
+q75_w <- q75 |>
+  filter(mgmt == "With") |>
+  pull(q) |>
+  round(2)
+q75_wo <- q75 |>
+  filter(mgmt == "Without") |>
+  pull(q) |>
+  round(2)
 
 n_below_0 <- df |>
-  filter(delta_density < 0, delta_time == md) |>
+  filter(delta_density < 0, years == 5) |>
   group_by(mgmt, density_cat) |>
   summarise(n_below_0 = n())
 
 n_all <- df |>
-  filter(delta_time == md) |>
+  filter(years == 5) |>
   group_by(mgmt, density_cat) |>
   summarise(n = n())
 
 pfall <- left_join(n_all, n_below_0) |>
-  mutate(percent_fell = round(n_below_0 / n * 100, 1))
+  mutate(
+    n_below_0 = replace_na(n_below_0, 0),
+    percent_fell = round(n_below_0 / n * 100, 1)
+  )
 
 get_p <- function(x, c) {
   pfall |>
@@ -142,32 +310,32 @@ p_w_m <- get_p("Medium", "With")
 p_wo_m <- get_p("Medium", "Without")
 p_w_h <- get_p("High", "With")
 p_wo_h <- get_p("High", "Without")
-
-
+p_w_vh <- get_p("Very high", "With")
+p_wo_vh <- get_p("Very high", "Without")
 ```
 
-Removing individuals from the population was inherent to the model and thus abundance estimation. We assessed the impact of removals by simulating population dynamics with the number of indivudals removed set to zero, and the compared density estimates with and without removals.  
+Since the removal model inherently involves removing individuals for abundance estimation (Foster et al. 2025), simulating population dynamics with zero removals enables an assessment of management's impact, and determines whether removals are ecologically and/or economically effective (Davis et al. 2018).
 
-The variation in the effect of management across states increased with each density category. 
-When the initial density was low (i.e. <2 pigs/km2), the range in the difference between conducting removals and not was between `r min_low_delta_m` and `r max_low_delta_m` pigs/km2 after one year in `r min_low_delta_s` and `r max_low_delta_s`, respectively. 
-When the initial density was between 2-6 pigs/km2 (i.e. medium), the range in the difference between conducting removals and not was between `r min_med_delta_m` and `r max_med_delta_m` pigs/km2 after one year in `r min_med_delta_s` and `r max_med_delta_s`, respectively. 
-Finaly, when the initial density was high (>6 pigs/km2), the range in the difference between conducting removals and not was between `r min_high_delta_m` and `r max_high_delta_m` pigs/km2 after one year in `r min_high_delta_s` and `r max_high_delta_s`, respectively.
+The variation in the effect of management was more pronounced as the initial density increased and as more time elapsed (Figure 3). 
+For example, the amount of density prevented when the initial density of wild pigs was low (i.e. <1 pigs/km2) did not vary over five years, where after one year there was, at the median, `r low_1` pigs/km2 prevented (i.e. density increased slightly with management), while `r low_5` pigs/km2 were prevented after five years. 
+However, when management occured the most likely outcome after five years in the low density scenario was to keep populations steady (purple bars Figure 3), which is contrast to the no managment simulations (orange bars, Fig ##) which were more likely to grow. Specifically, 75% of managed populations grew by no more than `r q75_w` pigs/km2 while 25% of the simulations without management grew by at least `r q75_wo` pigs/km2 (Figure 3). 
 
-Across all bootstrap simulations, `r p_w_l`, `r p_w_m`, and `r p_w_h` percent of properties saw wild pig densities fall after one year while conducting removals for the low, medium, and high initial density scenarios, respectively. This is in contrast to the simulations that did not conduct removals, where `r p_wo_l`, `r p_wo_m`, and `r p_wo_h`percent of properties saw wild pig densities fall after one year for the low, medium, and high initial density scenarios, respectively.
+The amount of density prevented after one year increased with initial density, where `r med_1`, `r high_1`, and `r vhigh_1` pigs/km2 were prevented when initial density was medium (1-3 pigs/km2), high (3-5 pigs/km2), and very high (>5 pigs/km2), respectively.
+After five years, the amount of density prevented was similar across the medium, high, and very high initial density scenarios, where `r med_5`, `r high_5`, and `r vhigh_5` pigs/km2 were prevented, repsectively. 
+The absolute drop in density with managment was most apparent in the very high density scenario, where the median reduction in density across all years was at least 5.5 pigs/km2 (Fig ##).
+
+Additionally, across all bootstrap simulations, `r p_w_l`, `r p_w_m`, `r p_w_h`, and `r p_w_vh` percent of properties saw wild pig densities fall after one year while conducting removals for the low, medium, high, and very high initial density scenarios, respectively. This is in contrast to the simulations that did not conduct removals, where `r p_wo_l`, `r p_wo_m`, `r p_wo_h`, and `r p_wo_vh` percent of properties saw wild pig densities fall after one year for the low, medium, high, and very high initial density scenarios, respectively.
 
 ### Population growth rate
 
 ```{r}
 #| label: fig-lambda
 #| fig-cap: "Figure shows the average population growth rate at each property within each state. The number of properties (n) within each state are on the y-axis. A growth rate greater than one indicates that a property's population is growing. Values of zero represent properties that went extinct between the first and second observed primary periods. Boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR."
-
 tar_read("plot_lambda_hat_by_state")
-
 ```
 
 ```{r}
 #| label: lambda analysis
-
 df <- tar_read("mu_lambda")
 
 all_prop_med <- round(median(df$mu), 2)
@@ -220,13 +388,11 @@ n_under_1 <- lambda_summary |>
 n0 <- df |>
   filter(mu == 0) |>
   nrow()
-
 ```
 
 ```{r}
 #| label: tbl-lambda
 #| tbl-cap: The mean and standard deviation (SD) of average property growth rates across properties in each state (n is the number of properties in each state).
-
 lambda_summary |>
   rename(
     State = st_name,
@@ -237,7 +403,6 @@ lambda_summary |>
   select(State, Mean, SD, n) |>
   arrange(desc(Mean)) |>
   knitr::kable()
-
 ```
 
 Population growth rates were calculated for every timepoint (i.e. per 28-day period) with respect to removals, and then averaged for each property (i.e. population), meaning the average growth rate for each property represents the trajectory of each population given wild pig management. 
@@ -247,16 +412,11 @@ Individual populations exhibited a range of average population growth rates. Acr
 ### Proportion removed
 
 ```{r}
-#| label: fig-removals
-#| fig-cap: "Summary of the avearge proportion of the population removed by method at the property level. Boxplots represent the median and interquartile range (IQR), where the whiskers extend plus or minus 1.5 times the IQR."
-
-tar_read("plot_prop_take")
 
 ```
 
 ```{r}
 #| label: proportion take
-df_actual <- tar_read("actual_percent_take")
 df_lambda <- tar_read("mu_lambda") |>
   rename(lambda = mu) |>
   select(-n)
@@ -282,18 +442,7 @@ tx_epr_heli_med <- tx_epr_heli$med
 tx_epr_heli_low <- tx_epr_heli$low
 tx_epr_heli_high <- tx_epr_heli$high
 
-by_state <- function(df) {
-  df |>
-    group_by(method, st_name) |>
-    summarise(
-      med = median(mu_prop_take),
-      low = quantile(mu_prop_take, 0.05),
-      high = quantile(mu_prop_take, 0.95)
-    ) |>
-    ungroup()
-}
 
-a_by_state <- by_state(df_actual)
 
 tx_heli <- a_by_state |>
   filter(method == "Helicopter", st_name == "TEXAS")
@@ -321,69 +470,15 @@ epr <- function(apr, lambda) {
 }
 
 tx_heli_epr <- epr(tx_heli_med, tx_lambda_med)
-
-
 ```
 
 
 ```{r}
 
-df_d <- tar_read("model_data_last") |>
-  select(propertyID, property_area_km2) |>
-  unique()
-
-tmp <- left_join(df_actual, df_d)
-
-my_summary <- function(y, r) {
-  tmp |>
-    group_by(method) |>
-    summarise(
-      med = round(median(.data[[y]]), r),
-      low = round(quantile(.data[[y]], 0.05), r),
-      high = round(quantile(.data[[y]], 0.95), r),
-    ) |>
-    mutate(v = paste0(med, " (", low, "-", high, ")")) |>
-    select(method, v) |>
-    rename(Method = method)
-}
-
-apr <- my_summary("mu_prop_take", 2) |> rename(APR = v)
-area <- my_summary("property_area_km2", 1) |> rename(Area = v)
-effort <- my_summary("mu_total_effort_per", 1) |> rename(Effort = v)
-n_props <- tmp |>
-  select(method, propertyID) |>
-  distinct() |>
-  count(method) |>
-  rename(
-    `n properties` = n,
-    Method = method
-  )
-
-# fmt: skip
-units <- tribble(
-  ~Method, ~`Effort unit`,
-  "Fixed wing", "Hobbs hours per aircraft",
-  "Helicopter", "Hobbs hours per aircraft",
-  "Sharpshooting", "Shooters per hour",
-  "Snare", "Snares per night",
-  "Trap", "Traps per night"
-)
-
-left_join(apr, area) |>
-  left_join(effort) |>
-  left_join(units) |>
-  left_join(n_props) |>
-  select(Method, APR, Area, Effort, `Effort unit`, `n properties`) |>
-  knitr::kable()
-
-
-
-
 ```
 
 
 ```{r}
-
 trap <- a_by_state |>
   filter(method == "Trap")
 
@@ -430,7 +525,6 @@ heli <- a_by_state |>
 
 heli_min <- heli |> filter(med == min(med))
 heli_max <- heli |> filter(med == max(med))
-
 ```
 
 Removal methods were not deployed at all properties or even in all states. Addionally, resource constraints and envionmental conditions can dictate which methods are deployed and when. Therefore, understanding the effectiveness of each method is critical for evaluating future removal efforts. 
@@ -441,16 +535,19 @@ There were `r n_0_trap` states where the median proportion of the population rem
 
 ```{r}
 #| label: fig-epr
-#| fig-cap: A) The average actual proportion of the population removed (APR) by each method in each property. B) The area of each property where methods where used. C) The average total effort per unit deployed for each method in each property. D) The theoretical expected proportion of the population remaining (EPR) given growth rate and APR. A value of 1 indicates eradication, 0 indicates no change, and -1 indicates a populattion expected to double. The dashed line shos the threshold at which populations are expected to grow or increase, and the dotted line shows the threshold at which populations are expected to reduce by more (slash) or less (shrink) than half. For A-C, the data are grouped into the EPR given the average growth rate of the property where the method was deployed. Events the led to population growth are in red, events that lead to a shrinking population are in light blue, and events that lead to a slashing population are in dark blue.
-
+#| fig-cap: A) The average actual proportion of the population removed (APR) by each method in each property. B) The area of each property where methods where used. C) The average total effort per unit (TEPU) deployed for each method in each property. For A-C, the data are grouped into the EPT given the average growth rate of the property where the method was deployed. Events the led to population growth are in red, events that lead to a shrinking population are in light blue, and events that lead to a slashing population are in dark blue. D) The theoretical expected population trajectory (EPT) given a population's growth rate and APR. A value of -1 indicates eradication (blue), 0 indicates no change (white), and 1 indicates a populattion that is expected to double (red). The dotted line shows the threshold at which populations are expected to grow or increase, and the dashed line shows the threshold at which populations are expected to reduce by more (slash) or less (shrink) than half.
 tar_read("plot_epr")
-
 ```
 
 
 ```{r}
-
 df <- tar_read("epr_data")
+
+properties_m <- df |>
+  group_by(method) |>
+  count() |>
+  ungroup()
+
 
 make_epr_summaries <- function(df, y) {
   df |>
@@ -458,14 +555,49 @@ make_epr_summaries <- function(df, y) {
     summarise(
       med = as.character(round(median(.data[[y]]), 2)),
       low = round(quantile(.data[[y]], 0.05), 2),
-      high = round(quantile(.data[[y]], 0.95), 2)
+      high = round(quantile(.data[[y]], 0.95), 2),
+      n_properties = n()
     ) |>
-    ungroup()
+    ungroup() |>
+    left_join(properties_m) |>
+    mutate(p = round(n_properties / n * 100, 1))
 }
+
 
 aprs <- make_epr_summaries(df, "mu_prop_take")
 area <- make_epr_summaries(df, "property_area_km2")
-effort <- make_epr_summaries(df, "mu_total_effort_per")
+effort <- make_epr_summaries(df, "effort_per_unit_per_area")
+
+get_mu <- function(df, y, v) {
+  df |>
+    group_by(epr_cat) |>
+    summarise(
+      mu = mean(.data[[y]])
+    ) |>
+    ungroup() |>
+    filter(epr_cat == v) |>
+    pull(mu)
+}
+
+apr_grow <- df |> get_mu("mu_prop_take", "Grow")
+apr_shrink <- df |> get_mu("mu_prop_take", "Shrink")
+apr_slash <- df |> get_mu("mu_prop_take", "Slash")
+apr_slash_shrink <- round(apr_slash / apr_shrink, 2)
+apr_shrink_grow <- round(apr_shrink / apr_grow, 2)
+
+area_grow <- df |> get_mu("property_area_km2", "Grow")
+area_shrink <- df |> get_mu("property_area_km2", "Shrink")
+area_slash <- df |> get_mu("property_area_km2", "Slash")
+area_slash_shrink <- round(area_shrink - area_slash, 2)
+area_shrink_grow <- round(area_grow - area_shrink, 2)
+
+effort_grow <- df |> get_mu("effort_per_unit_per_area", "Grow")
+effort_shrink <- df |> get_mu("effort_per_unit_per_area", "Shrink")
+effort_slash <- df |> get_mu("effort_per_unit_per_area", "Slash")
+effort_slash_shrink <- round(effort_shrink - effort_slash, 2)
+effort_shrink_grow <- round(effort_grow - effort_shrink, 2)
+
+
 
 epr_kable <- function(df) {
   df |>
@@ -483,28 +615,21 @@ n_eprcat <- df |> count(method, epr_cat)
 
 per_each <- left_join(n_eprcat, n_method) |>
   mutate(p = round(n / nt * 100))
-
 ```
 
 ### The expected trajectory of the population (ETP)
 
-The expected trajectory of the population (ETP) is a metric that combines the actual proportion removed (APR) with the population growth rate to estimate the net effect of removals on population size. If EPT equals 1, the population is expected to be eradicated, at zero the population is expected to remain unchanged, and if less than zero, the population is expected to grow. This metric allows for direct comparison of removal effectiveness across properties and methods. 
+The expected trajectory of the population (ETP) is a metric that combines the actual proportion removed (APR; FIgure 1) with the population growth rate to estimate the net effect of removals on population size. If EPT equals -1, the population is expected to be eradicated, at zero the population is expected to remain unchanged, and if more than zero, the population is expected to grow. This metric allows for direct comparison of removal effectiveness across properties and methods. To ease interpretation we have categorized expected trajectories into three categories; slash is an expected reduction over 50% of the initial population size, shrink as an expected reduction between 0-50%, and grow means that a population is expected to increase.
 
-As expected, to slash a population (i.e. reduce it by more than half) the APR was greater than to shrink a population (i.e. reduce it by less than half), and the smallest APRs actually resulted in a growing population (@fig-epr A). This was apparent for all methods.
+At the population level, on average, the most common EPT for each method except fixed wing aircraft led to a shrinking population. The most common EPT for fixed wing aircraft was growing, which was expected for 54 populations while 52 populations were expected to shrink. For every method except helicopters, slashing a population was, on everage the least likely EPT. For traps, snares, and sharpshooting, the likely outcome was shrinking, then growing, and least likely was slashing.  
 
-At the median, when traps took 1% of the population the EPT was a growing one. When traps took an additional 4%, the EPT was a shrinking one, and 6% on top of that resulted in an expected slashing of the population. Across all trapping events, 31%, 55%, and 14% of events had an EPT of grow, shrink, and slash, respectively. 
+Across all methods, the APR needed to slash a population was, on average, greater than to shrink a population by a factor of `r apr_slash_shrink`, and the APRs required to shrink a population were greater than those that resulted in a growing population by a factor of `r apr_shrink_grow`. For area, across all methods, populations expected to shrink were, on average, on properties `r area_slash_shrink` km2 larger than populations on properties expected to slash, and populations expected to grow were on properties `r area_shrink_grow` km2 larger than than populaitons on properties expected to shrink.
 
-At the median, when snares took 1% of the population the EPT was a growing one. When snares took an additional 3%, the EPT was a shrinking one, and 8% on top of that resulted in an expected slashing of the population. Across all snaring events, 30%, 56%, and 14% of events had an EPT of grow, shrink, and slash, respectively. 
+Generalizing effort across methods is difficult because the unit of effort differs across methods (Table 1), and because each method is used in different ecological and management contexts (see Discussion). To attempt to generalize within each method (and therefore deployment context), we use a standardized metric of average total effort per unit deployed per area deployed (i.e. property area) to understand how the density of effort affects EPT. Here, the same pattern holds for all methods, where when the density of effort is greatest, the population is expected to slash, followed by shrink, and the lowest effort density leads to expected population growth (Figure 4C). 
 
-At the median, when sharpshooting took 2% of the population the EPT was a growing one. When sharpshooting took an additional 12%, the EPT was a shrinking one, and 19% on top of that resulted in an expected slashing of the population. Across all sharpshooting events, 22%, 63%, and 15% of events had an EPT of grow, shrink, and slash, respectively. 
 
-At the median, when helicopters took 5% of the population the EPT was a growing one. When helicopters took an additional 17%, the EPT was a shrinking one, and 36% on top of that resulted in an expected slashing of the population. Across all helicopter events, 11%, 59%, and 30% of events had an EPT of grow, shrink, and slash, respectively. 
 
-At the median, when fixed wing aircraft took 0% of the population the EPT was a growing one. When fixed wing aircraft took an additional 1%, the EPT was a shrinking one, and 1% on top of that resulted in an expected slashing of the population. Across all fixed wing events, 47%, 45%, and 9% of events had an EPT of grow, shrink, and slash, respectively.
 
-There was a gradient in property area where take that was expected to slash a population mostly occurred on smaller properties compared to that of shrinking and growing. This gradient was apparent for all methods (@fig-epr B). For example, the median property size (km^2) where growth was expected to occurr compared to where slashing was expected to occur was on properterites that were 3.4, 1.5, 3.7, 5.2 and 2.9 times larger for traps, snares, sharpshooting, helicopters, and fixed wing aircraft, respectively (Supplement table S##). 
-
-The effort required to achieve a significant reduction in the population was remarkably similar to the effort observed in cases where populations were expected to grow. For example, the largest difference in effort per unit deployed was for sharpshooting, where 5 (90% CI 1.9-20.8) shooters per hour resulted in slashing and 7.83 (90% CI 2.25-22.5) shooters per hour resulted in population growth (Supplementary table s##). 
 
 ### APR
 ```{r}
@@ -524,7 +649,6 @@ epr_kable(effort)
 ```{r}
 #| label: tbl-aprEpr
 #| tbl-cap: "The actual proportion of the population removed (APR) and the effective proportion of the population remove (EPR) across properties that used each method in each state. Negative EPR indicates the population is expected to grow. The units represent the distribution of APR and EPR given the number of properties (n) that used the method in each state. For one property we show the single value, between two and ten properties we show the range, and for ten or more properties we show the median and 90% confidence interval."
-
 df_epr |>
   select(method, st_name, mu_prop_take, epr) |>
   rename(APR = mu_prop_take, EPR = epr) |>
@@ -552,12 +676,9 @@ df_epr |>
   select(State, Method, APR, EPR, Units, n) |>
   arrange(State, Method) |>
   knitr::kable()
-
-
 ```
 
 ```{r}
-
 calculate_lambda_needed <- function(df, g, prop_rem_col) {
   df |>
     mutate(
@@ -596,8 +717,12 @@ df_actual_lambda_join <- left_join(df_actual_lambda_needed, lambda_by_method)
 lambda_filter <- df_actual_lambda_join |>
   filter(!is.na(lambda_actual)) |>
   mutate(
-    maintenance_2_half = if_else(lambda_actual <= lambda_needed_0 &
-      lambda_actual > lambda_needed_0.5, TRUE, FALSE),
+    maintenance_2_half = if_else(
+      lambda_actual <= lambda_needed_0 &
+        lambda_actual > lambda_needed_0.5,
+      TRUE,
+      FALSE
+    ),
     half = if_else(lambda_actual <= lambda_needed_0.5, TRUE, FALSE),
     check = if_else(half & maintenance_2_half, FALSE, TRUE)
   )
@@ -691,8 +816,16 @@ all_under_names <- property_stats |>
   rename(
     Method = method
   ) |>
-  select(Method, Goal, `Proportion removed`, Effort, `Units deployed`, `Effort per unit`, `Growth rate`, n)
-
+  select(
+    Method,
+    Goal,
+    `Proportion removed`,
+    Effort,
+    `Units deployed`,
+    `Effort per unit`,
+    `Growth rate`,
+    n
+  )
 ```
 
 #### Maintenance
@@ -700,9 +833,11 @@ all_under_names <- property_stats |>
 ```{r}
 #| label: tbl-maintenanceAll
 #| tbl-cap: "For each method, Proportion removed is the median proportion of the population removed across properties. Growth rate is the maximum population growth rate allowed so that a specific method could theoreticaly maintain the populution given the proportion removed. Summary statistics reported (median and 90% credible interval). The percentage of properties in the data set that meet this criteria are reported."
-
 goal_cols <- c(
-  "Method", "Proportion removed", "Growth rate", "n"
+  "Method",
+  "Proportion removed",
+  "Growth rate",
+  "n"
 )
 
 all_under_names |>
@@ -717,13 +852,11 @@ all_under_names |>
 ```{r}
 #| label: tbl-reduce50All
 #| tbl-cap: "For each method, Proportion removed is the median proportion of the population removed across properties. Growth rate is the maximum population growth rate allowed so that a specific method could theoreticaly reduce the population by half given the proportion removed. Summary statistics reported (median and 90% credible interval). The percentage of properties in the data set that meet this criteria are reported."
-
 all_under_names |>
   filter(Goal == "50% reduction") |>
   arrange(Method) |>
   select(-Goal) |>
   knitr::kable()
-
 ```
 
 ```{r}
@@ -754,21 +887,17 @@ p_under |>
   pivot_wider(names_from = method, values_from = x) |>
   arrange(State, Goal) |>
   knitr::kable()
-
-
 ```
 
 
 ```{r}
-
 p1 <- readRDS("../data-store/iterativeFits2/1_posterior/posteriorSamples.rds")
 p2 <- readRDS("../data-store/iterativeFits2/11_posterior/posteriorSamples.rds")
 
 var1 <- apply(p1, 2, var)
 var2 <- apply(p2, 2, var)
 
-mean(1 - var2/var1)
-
+mean(1 - var2 / var1)
 ```
 
 ```{r}
@@ -783,7 +912,10 @@ grid_search |>
   mutate(
     goal_cat = if_else(goal == 0, "Maintenance", "Eradication"),
     goal_cat = if_else(goal == 0.5, "50% reduction", goal_cat),
-    goal_cat = factor(goal_cat, levels = c("Maintenance", "50% reduction", "Eradication"))
+    goal_cat = factor(
+      goal_cat,
+      levels = c("Maintenance", "50% reduction", "Eradication")
+    )
   ) |>
   ggplot() +
   aes(y = needed, x = lambda, color = goal_cat) +
