@@ -154,7 +154,7 @@ create_data_growth <- function(df, df_pp, p2) {
 			delta_pp = c(NA, diff(pp))
 		) |>
 		ungroup() |>
-		filter(!is.na(take_m1))
+		filter(!is.na(delta_pp))
 }
 
 calculate_lambda <- function(df) {
