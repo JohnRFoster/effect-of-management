@@ -32,24 +32,30 @@ tar_make()
 ### Population estimates
 
 ```{r}
-density_cis <- tar_read("density_cis")
+density_cis <- tar_read("densities")
 
-overall <- density_cis$overall
-overall_med <- overall$med_dens
-overall_low <- overall$low_dens
-overall_high <- overall$high_dens
+overall <- density_cis$`0.5`
+overall_med <- round(median(overall), 1)
+overall_low <- round(quantile(overall, 0.05), 1)
+overall_high <- round(quantile(overall, 0.95), 1)
 overall_text <- paste0(overall_med, " (", overall_low, "-", overall_high, ")")
 
-by_year <- density_cis$by_year |>
-  select(year, med_dens, low_dens, high_dens) |>
+by_year <- density_cis |>
+  mutate(year = year(end_dates)) |>
+  group_by(year) |>
+  reframe(
+    med_dens = round(median(`0.5`), 1),
+    low_dens = round(quantile(`0.5`, 0.05), 1),
+    high_dens = round(quantile(`0.5`, 0.95), 1)
+  ) |>
   mutate(text = paste0(med_dens, " (", low_dens, "-", high_dens, ")"))
 
 text_2014 <- by_year |>
   filter(year == 2014) |>
   pull(text)
 
-text_2024 <- by_year |>
-  filter(year == 2024) |>
+text_2025 <- by_year |>
+  filter(year == 2025) |>
   pull(text)
 ```
 
