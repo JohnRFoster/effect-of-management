@@ -302,7 +302,7 @@ extract_parameters <- function(post_1, post_2) {
 		ungroup()
 }
 
-#' Standardize method and state names
+#' Standardize method names
 #'
 #' Converts all-caps method labels into publication-friendly names and maps state
 #' abbreviations/names using the shared `state_names` lookup.
@@ -320,6 +320,31 @@ fix_method_names <- function(df) {
 				method == "SNARE" ~ "Snare",
 				method == "TRAPS" ~ "Trap",
 				TRUE ~ method
+			)
+		)
+}
+
+#' Standardize Texas state names
+#'
+#' Converts Texas state names to a standardized format.
+#'
+#' @param df A data frame containing `st_name` column.
+#'
+#' @return The input data frame with standardized Texas state names.
+fix_state_names <- function(df) {
+	mutate(df, st_name = if_else(grepl("Texas", st_name), "Texas", st_name))
+}
+
+fix_state_names2 <- function(df) {
+	df |>
+		mutate(
+			st_name = case_when(
+				st_name == "Texas_south_central_semiarid_prairies" ~ "Texas SCSP",
+				st_name == "Texas_texas-Louisiana_coastal_plain" ~ "Texas TLCP",
+				st_name == "Texas_tamaulipas-Texas_semiarid_plain" ~ "Texas TTSP",
+				st_name == "Texas_warm_deserts" ~ "Texas WD",
+				st_name == "Texas_southeastern_usa_plains" ~ "Texas SEUP",
+				TRUE ~ st_name
 			)
 		)
 }
@@ -393,38 +418,32 @@ make_all_timesteps <- function(df) {
 #' @param mu_lambda A data frame of mean growth rates from `mean_growth()`.
 #' @param df_actual A data frame of observed method-level removal proportions from
 #'   `prop_take_by_method()`.
-#' @param model_data_last The final-round model data frame with property areas.
-#'
 #' @return A data frame with estimated population trajectory (`EPR`), trajectory
 #'   category, property area, and effort per unit area.
-make_epr_data <- function(mu_lambda, df_actual, model_data_last) {
-	df <- mu_lambda |>
-		rename(lambda = mu) |>
-		select(-n)
-
+make_epr_data <- function(df, df_actual) {
 	df_epr <- df_actual |>
 		left_join(df) |>
 		filter(!is.na(lambda), lambda > 0) |>
 		mutate(
 			EPR = lambda * (1 - mu_prop_take) - 1,
-			epr_cat = if_else(EPR > 0, "Grow", "Shrink"),
-			epr_cat = if_else(EPR <= -0.5, "Slash", epr_cat),
+			epr_cat = if_else(EPR > 0, "Increasing", "Moderately declining"),
+			epr_cat = if_else(EPR <= -0.5, "Strongly declining", epr_cat),
 			epr_cat = if_else(EPR == -1, "Eradicate", epr_cat),
 			epr_cat = factor(
 				epr_cat,
-				levels = c("Grow", "Shrink", "Slash", "Eradicate")
+				levels = c(
+					"Increasing",
+					"Moderately declining",
+					"Strongly declining",
+					"Eradicate"
+				)
 			)
 		) |>
 		filter(epr_cat != "Eradicate")
 
-	dat <- model_data_last |>
-		select(propertyID, property_area_km2) |>
-		# mutate(property_area_km2 = log(property_area_km2)) |>
-		distinct()
-
 	df_plot <- df_epr |>
-		left_join(dat, by = "propertyID") |>
 		mutate(effort_per_unit_per_area = mu_total_effort_per / property_area_km2)
+	df_plot
 }
 
 #' Summarize methods used by primary period
@@ -570,7 +589,6 @@ plot_bootstrap <- function(df) {
 		df |>
 			filter(
 				delta_time %in% keep,
-				!st_name %in% c("North Carolina", "Virginia", "West Virginia")
 			) |>
 			mutate(
 				weeks = delta_time / 364,
@@ -601,7 +619,7 @@ plot_bootstrap <- function(df) {
 	g2 <- my_plot(df) + facet_grid(density_cat ~ st_name)
 
 	ggsave(
-		filename = "plots/management_trajectory.pdf",
+		filename = "plots/management_trajectory.tiff",
 		plot = g1,
 		width = 10,
 		height = 6,
@@ -610,7 +628,7 @@ plot_bootstrap <- function(df) {
 	)
 
 	ggsave(
-		filename = "plots/management_trajectory_by_state.pdf",
+		filename = "plots/management_trajectory_by_state.tiff",
 		plot = g2,
 		width = 10,
 		height = 6,
@@ -629,7 +647,7 @@ plot_bootstrap <- function(df) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/demographic_parameters.pdf`.
+#' @return A ggplot object. Also writes `plots/demographic_parameters.tiff`.
 plot_demographic_parameters <- function(df_params, df_priors) {
 	nodes <- c("phi_mu", "psi_phi", "zeta")
 
@@ -656,7 +674,7 @@ plot_demographic_parameters <- function(df_params, df_priors) {
 		)
 
 	ggsave(
-		filename = "plots/demographic_parameters.pdf",
+		filename = "plots/demographic_parameters.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -707,18 +725,41 @@ plot_density_year <- function(dens_ls) {
 #'   directory.
 plot_effort <- function(epr_data) {
 	ept_cols <- c(
-		"Grow" = "#d73027",
-		"Shrink" = "#4393c3",
-		"Slash" = "#2166ac",
+		"Increasing" = "#d73027",
+		"Moderately declining" = "#4393c3",
+		"Strongly declining" = "#2166ac",
 		"Eradicate" = "#053061"
 	)
 
 	my_box <- function(x) {
+		w <- 0.75
 		epr_data |>
+			group_by(method, epr_cat) |>
+			summarise(
+				median = median(.data[[x]], na.rm = TRUE),
+				l = quantile(.data[[x]], 0.05, na.rm = TRUE),
+				q1 = quantile(.data[[x]], 0.25, na.rm = TRUE),
+				q3 = quantile(.data[[x]], 0.75, na.rm = TRUE),
+				u = quantile(.data[[x]], 0.95, na.rm = TRUE)
+			) |>
 			ggplot() +
-			aes(x = .data[[x]], y = method, color = epr_cat) +
+			aes(x = median, y = method, color = epr_cat, group = epr_cat) +
 			labs(color = "Population trajectory") +
-			geom_boxplot(outliers = FALSE) +
+			geom_linerange(
+				aes(xmin = l, xmax = u),
+				linewidth = 1,
+				position = position_dodge(width = w)
+			) +
+			geom_linerange(
+				aes(xmin = q1, xmax = q3),
+				linewidth = 2,
+				position = position_dodge(width = w)
+			) +
+			geom_point(
+				aes(x = median),
+				size = 3,
+				position = position_dodge(width = w)
+			) +
 			scale_color_manual(
 				values = ept_cols
 			) +
@@ -726,7 +767,7 @@ plot_effort <- function(epr_data) {
 			theme(
 				axis.title.y = element_blank(),
 				axis.text = element_text(size = 10),
-				axis.title = element_text(size = 14),
+				axis.title = element_text(size = 12),
 				legend.title = element_text(size = 12),
 				strip.text = element_text(size = 12),
 				legend.text = element_text(size = 10)
@@ -822,7 +863,7 @@ plot_effort <- function(epr_data) {
 	)
 
 	ggsave(
-		filename = "plots/epr_effort_compAdditive.pdf",
+		filename = "plots/epr_effort_compAdditive.tiff",
 		plot = g,
 		width = 10,
 		height = 8,
@@ -840,7 +881,7 @@ plot_effort <- function(epr_data) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/effort_saturation.pdf`.
+#' @return A ggplot object. Also writes `plots/effort_saturation.tiff`.
 plot_effort_saturation <- function(df_params, df_priors) {
 	g <- my_node_linerange(df_params, df_priors, "gamma") +
 		facet_wrap(~method_names, scales = "free_x") +
@@ -852,7 +893,7 @@ plot_effort_saturation <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/effort_saturation.pdf",
+		filename = "plots/effort_saturation.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -871,7 +912,7 @@ plot_effort_saturation <- function(df_params, df_priors) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/effort_scaling.pdf`.
+#' @return A ggplot object. Also writes `plots/effort_scaling.tiff`.
 plot_effort_scaling <- function(df_params, df_priors) {
 	g <- my_node_linerange(df_params, df_priors, "rho") +
 		facet_wrap(~method_names, scales = "free_x") +
@@ -883,7 +924,7 @@ plot_effort_scaling <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/effort_scaling.pdf",
+		filename = "plots/effort_scaling.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -902,7 +943,7 @@ plot_effort_scaling <- function(df_params, df_priors) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/effort_unique_area.pdf`.
+#' @return A ggplot object. Also writes `plots/effort_unique_area.tiff`.
 plot_effort_unique_area <- function(df_params, df_priors) {
 	g <- my_node_linerange(df_params, df_priors, "p_mu") +
 		facet_wrap(~method_names) +
@@ -914,7 +955,7 @@ plot_effort_unique_area <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/effort_unique_area.pdf",
+		filename = "plots/effort_unique_area.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -932,11 +973,11 @@ plot_effort_unique_area <- function(df_params, df_priors) {
 #'
 #' @param df A mean-growth data frame from `mean_growth()`.
 #'
-#' @return A ggplot object. Also writes `plots/lambda_hat_by_state.pdf`.
+#' @return A ggplot object. Also writes `plots/lambda_hat_by_state.tiff`.
 plot_mean_lambdas <- function(df) {
 	y_order <- df |>
 		group_by(st_name) |>
-		summarise(y = median(mu), n = n()) |>
+		summarise(y = median(mu, na.rm = TRUE), n = n()) |>
 		arrange(y) |>
 		select(-n)
 
@@ -972,7 +1013,7 @@ plot_mean_lambdas <- function(df) {
 		)
 
 	ggsave(
-		filename = "plots/lambda_hat_by_state.pdf",
+		filename = "plots/lambda_hat_by_state.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1037,7 +1078,7 @@ plot_params_compare <- function(post_all) {
 	)
 
 	ggsave(
-		filename = "plots/posterior_comparison_active_methods.pdf",
+		filename = "plots/posterior_comparison_active_methods.tiff",
 		width = 7,
 		height = 5,
 		units = "in",
@@ -1056,7 +1097,7 @@ plot_params_compare <- function(post_all) {
 	)
 
 	ggsave(
-		filename = "plots/posterior_comparison_passive_methods.pdf",
+		filename = "plots/posterior_comparison_passive_methods.tiff",
 		width = 7,
 		height = 5,
 		units = "in",
@@ -1097,7 +1138,7 @@ plot_params_compare <- function(post_all) {
 	)
 
 	ggsave(
-		filename = "plots/posterior_comparison_betas.pdf",
+		filename = "plots/posterior_comparison_betas.tiff",
 		width = 12,
 		height = 10,
 		units = "in",
@@ -1113,11 +1154,9 @@ plot_params_compare <- function(post_all) {
 #' @param df_actual A data frame of observed method-level removal proportions from
 #'   `prop_take_by_method()`.
 #'
-#' @return A ggplot object. Also writes `plots/prop_take.pdf`.
+#' @return A ggplot object. Also writes `plots/prop_take.tiff`.
 plot_percent_take <- function(df_actual) {
-	tmp <- bind_rows(df_actual) |>
-		# removing these states because their properties are all declining
-		filter(!st_name %in% c("North Carolina", "Virginia", "West Virginia"))
+	tmp <- df_actual
 
 	plot_states <- function(df) {
 		ta <- df |>
@@ -1132,28 +1171,62 @@ plot_percent_take <- function(df_actual) {
 						"Trap"
 					)
 				)
+			) |>
+			group_by(st_name, method) |>
+			reframe(
+				y = median(mu_prop_take),
+				n = n(),
+				interval_type = if_else(n < 10, "Range", "90% interval"),
+				interval_type = if_else(n == 1, "Point", interval_type),
+				ymin = if_else(
+					n < 10,
+					min(mu_prop_take),
+					quantile(mu_prop_take, 0.05)
+				),
+				ymax = if_else(
+					n < 10,
+					max(mu_prop_take),
+					quantile(mu_prop_take, 0.95)
+				)
 			)
 
+		sts <- rev(sort(unique(ta$st_name)))
+
 		ta |>
+			mutate(st_name = factor(st_name, levels = sts)) |>
 			ggplot() +
-			aes(x = mu_prop_take, y = method) +
-			geom_boxplot() +
+			aes(
+				x = y,
+				xmin = ymin,
+				xmax = ymax,
+				y = method,
+				color = interval_type
+			) +
+			geom_point(size = 3) +
+			geom_linerange(
+				linewidth = 1,
+				stat = "identity"
+			) +
 			facet_wrap(~st_name) +
-			coord_cartesian(xlim = c(0, 1)) +
 			labs(
 				x = "Mean proportion of individuals removed in a 28-day period",
 				y = "Method",
-				color = "Actual"
+				color = "Statistic"
 			) +
-			scale_y_discrete(drop = FALSE) +
-			scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.2)) +
-			facet_wrap(~st_name) +
+			scale_color_manual(
+				values = c(
+					"Range" = "#1b9e77",
+					"90% interval" = "#7570b3",
+					"Point" = "#d95f02"
+				)
+			) +
 			theme_bw() +
 			theme(
-				axis.text = element_text(size = 14),
+				axis.text.y = element_text(size = 12),
+				axis.text.x = element_text(size = 10, angle = 90, vjust = 0.5),
 				axis.title = element_text(size = 16),
 				legend.title = element_text(size = 16),
-				strip.text = element_text(size = 14),
+				strip.text = element_text(size = 12),
 				legend.text = element_text(size = 14)
 			)
 	}
@@ -1161,7 +1234,7 @@ plot_percent_take <- function(df_actual) {
 	g <- plot_states(tmp)
 
 	ggsave(
-		filename = "plots/prop_take.pdf",
+		filename = "plots/prop_take.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1210,7 +1283,7 @@ plot_prior_posterior_linerange <- function(df, w = 0.5, lw = 1.25) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/state_intercepts_rem_rate.pdf`.
+#' @return A ggplot object. Also writes `plots/state_intercepts_rem_rate.tiff`.
 plot_state_intercepts_rem_rate <- function(df_params, df_priors) {
 	g <- my_linerange(df_params, df_priors, "Intercept") +
 		facet_wrap(~method_names, scales = "free_x") +
@@ -1222,7 +1295,7 @@ plot_state_intercepts_rem_rate <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/state_intercepts_rem_rate.pdf",
+		filename = "plots/state_intercepts_rem_rate.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1241,7 +1314,7 @@ plot_state_intercepts_rem_rate <- function(df_params, df_priors) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/states_canopy_cover.pdf`.
+#' @return A ggplot object. Also writes `plots/states_canopy_cover.tiff`.
 plot_states_canopy_cover <- function(df_params, df_priors) {
 	g <- my_linerange(df_params, df_priors, "Canopy cover") +
 		facet_wrap(~method_names) +
@@ -1254,7 +1327,7 @@ plot_states_canopy_cover <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/states_canopy_cover.pdf",
+		filename = "plots/states_canopy_cover.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1273,7 +1346,7 @@ plot_states_canopy_cover <- function(df_params, df_priors) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/states_road_density.pdf`.
+#' @return A ggplot object. Also writes `plots/states_road_density.tiff`.
 plot_states_road_density <- function(df_params, df_priors) {
 	g <- my_linerange(df_params, df_priors, "Road density") +
 		facet_wrap(~method_names) +
@@ -1286,7 +1359,7 @@ plot_states_road_density <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/states_road_density.pdf",
+		filename = "plots/states_road_density.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1305,7 +1378,7 @@ plot_states_road_density <- function(df_params, df_priors) {
 #' @param df_params A posterior parameter summary data frame.
 #' @param df_priors A prior parameter summary data frame.
 #'
-#' @return A ggplot object. Also writes `plots/states_ruggedness.pdf`.
+#' @return A ggplot object. Also writes `plots/states_ruggedness.tiff`.
 plot_states_ruggedness <- function(df_params, df_priors) {
 	g <- my_linerange(df_params, df_priors, "Ruggedness") +
 		facet_wrap(~method_names) +
@@ -1318,7 +1391,7 @@ plot_states_ruggedness <- function(df_params, df_priors) {
 		theme(legend.position = "none")
 
 	ggsave(
-		filename = "plots/states_ruggedness.pdf",
+		filename = "plots/states_ruggedness.tiff",
 		plot = g,
 		width = 10,
 		height = 6,
@@ -1371,21 +1444,32 @@ prepare_prior_posterior_params <- function(df_params, df_priors) {
 #' @return A data frame of method-property-state averages for removal proportion,
 #'   effort, effort-per-unit, trap count, and event counts.
 prop_take_by_method <- function(df, df_density) {
-	df |>
+	z_take <- df |>
 		fix_method_names() |>
-		group_by(
+		select(
 			propertyID,
-			agrp_prp_id,
+			method,
+			take,
+			effort,
+			effort_per,
+			trap_count,
 			start_dates,
 			end_dates,
 			st_name,
-			cnty_name,
-			alws_agrprop_id,
-			property,
-			primary_period,
+			order
+		) |>
+		left_join(df_density) |>
+		filter(!is.na(`0.5`)) |>
+		mutate(abundance_estimate = round(`0.5` * property_area_km2)) |>
+		filter(abundance_estimate > 0) |>
+		group_by(
+			propertyID,
+			st_name,
+			start_dates,
+			end_dates,
+			method,
 			property_area_km2,
-			county_code,
-			method
+			abundance_estimate
 		) |>
 		summarise(
 			total_take = sum(take),
@@ -1397,27 +1481,19 @@ prop_take_by_method <- function(df, df_density) {
 			total_log_trap_count = sum(log(trap_count)),
 			total_events = n()
 		) |>
-		left_join(df_density) |>
 		ungroup() |>
-		mutate(abundance_estimate = round(`0.5` * property_area_km2)) |>
-		filter(abundance_estimate > 0) |>
 		mutate(
-			prop_take = total_take / abundance_estimate,
-			density = `0.5`,
-			method = stringr::str_replace(method, "Firearms", "Ground-shooting")
-		) |>
-		group_by(method, propertyID, st_name) |>
-		summarise(
-			mu_events = mean(total_events),
-			mu_prop_take = mean(prop_take),
-			mu_total_effort = mean(total_effort),
-			mu_total_log_effort = mean(total_log_effort),
-			mu_total_effort_per = mean(total_effort_per),
-			mu_total_log_effort_per = mean(total_log_effort_per),
-			mu_total_trap_count = mean(total_trap_count),
-			mu_total_log_trap_count = mean(total_log_trap_count)
-		) |>
-		ungroup()
+			mu_events = total_events,
+			mu_prop_take = total_take / abundance_estimate,
+			mu_total_effort = total_effort,
+			mu_total_log_effort = total_log_effort,
+			mu_total_effort_per = total_effort_per,
+			mu_total_log_effort_per = total_log_effort_per,
+			mu_total_trap_count = total_trap_count,
+			mu_total_log_trap_count = total_log_trap_count
+		)
+
+	z_take
 }
 
 #' Run management bootstrap simulations
@@ -1471,6 +1547,7 @@ run_bootstrap <- function(
 	all_out <- tibble()
 
 	df_data <- df_data |> filter(!is.na(n_id))
+	df_params <- df_params |> fix_state_names()
 
 	state_vec <- df_data |>
 		pull(st_name) |>
