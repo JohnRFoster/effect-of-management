@@ -54,6 +54,7 @@ plots/
 analysis_files/
 .vscode/
 _targets/
+results_files/
 
 # custom linting files
 .lintr
