@@ -61,3 +61,5 @@ _targets/
 # files
 scratch.R
 analysis.html
+.vdoc.*
+.positai
